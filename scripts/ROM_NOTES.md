@@ -19,7 +19,7 @@ Danger/Peril IDs are `$5A/$5B` for A, `$5C/$5D` for B, and `$5E/$5F` for C.
 | `$3F00` | Initialize sound | Called after patch state is cleared at startup |
 | `$3F06` | Advance audio | Runs first every frame, retaining native SFX |
 | `$3F0C` | Play SFX | Entry unmodified; original effect data and volume retained; pulse selection adjusted below |
-| `$3F12` | Start BGM | Intercepts only the six music IDs when GB is enabled |
+| `$3F12` | Start BGM | Intercepts A/B/C preview, normal, Danger and Peril IDs when GB is enabled |
 | `$3F18` | Start BGM if different | Preserves conditional restart behavior |
 | `$3F24` | Suspend BGM | Also freezes and mutes the original player |
 | `$3F2A` | Resume BGM | Also resumes the original player and restores notes |
@@ -36,18 +36,19 @@ The game/music menu is state `$04`. Its code is in bank `$05`:
 
 | ROM offset | Purpose |
 | --- | --- |
-| `$014C48` | Mode-row input call, originally to CPU `$4C6F` |
-| `$014C5B` | Music-row input call, originally to CPU `$4CAB` |
+| `$014C48` | Mode-row input call: Select toggles PINCH, then native input |
+| `$014C5B` | Music-row input call: Select toggles PINCH, Left/Right switches sets |
 | `$014C01` | Initialize the extended music tab before enabling the LCD |
-| `$014C61` | VBlank display routine, updates the A/B suffix |
+| `$014C61` | VBlank display routine, updates the A/B suffix and PINCH strip |
 | `$014D6C` | Draw the seven-character inactive label on CGB |
 | `$014DB5` | Draw the seven-character inactive label on DMG/SGB |
 
-Select is bit 2 of the newly pressed input mask at `$FF83`. Both input wrappers
-check this bit and flip the set. Only when `$DB0E` indicates music focus does the
-wrapper restart the selected preview. Selecting the set on a mode row leaves the
-existing menu music playing. Holding Select switches once. OFF remains silent
-when the set changes. Original input handling continues after the wrapper. The
+Left/Right are bits 5/4 of the newly pressed input mask at `$FF83`. Only the
+music-focus wrapper checks these to flip the set and restart the current
+preview, with `$DB0E` also checked defensively. The mode-row wrapper leaves the
+set alone. Select (bit 2) toggles PINCH in either focus without restarting music.
+Holding a button changes its setting once. OFF remains silent when the set
+changes. Original input handling continues after the wrapper. The
 display wrapper writes font tile `$80` (A, DX) or `$81` (B, GB) at `$99A9`
 during the existing menu VBlank routine, preserving the VRAM bank.
 
@@ -66,6 +67,17 @@ unused menu tiles (`$9B/$C8/$C9`). The CGB wrapper replaces the label drawing
 call; the DMG wrapper replaces only the inactive label and retains the native
 song cursor when music has focus. Original ROM graphics and other menus' sprite
 lists remain intact.
+
+The 80x8 PINCH strip occupies background row 17, columns 0..9 (screen x=0..79,
+y=136..143; tilemap `$9A20..9A29`). With the LCD off, the builder's injected
+routine bakes two sets of ten tiles, reading the existing bottom-row patterns
+and ORing black font pixels into both bitplanes. This preserves the textured
+color backdrop and the monochrome background. The colon is a small embedded
+bitmap; other characters reuse the native font. `PINCH_TILES` lists twenty
+unused positive BG tile IDs, whose VRAM addresses `$9000+` do not overlap sprite
+tiles. Existing background attributes remain intact. VBlank refreshes only the
+ten tilemap entries according to PINCH; no tile graphics are rewritten then.
+Both menu settings persist in WRAM until reset, with PINCH initialized to ON.
 
 ## Original player and ROM banking
 
@@ -101,8 +113,13 @@ DX's native height decision at bank `$01`, CPU `$4C40..4C6B`, selects normal
 music below 11 rows, Danger at 11..13, and Peril at 14..16. The bridge intercepts
 the six variant IDs above and retains DX's conditional restart behavior: a change
 of version starts the song once, while repeated requests leave it advancing.
-At 17 rows DX uses a separate shared alarm (`$4C`); that alarm remains native.
-Music OFF and the DX set follow the original logic.
+At 17 rows DX uses a separate shared alarm (`$4C`); that alarm remains native
+when PINCH is ON. With PINCH OFF, a checked hook at ROM `$004C47` sends every
+height decision to the original normal-music path at CPU `$4C4B`, using `$AC0E`.
+This suppresses Danger, Peril, and the final alarm for both music sets, and zero
+still means music OFF. The existing conditional BGM call prevents repeated
+height checks from restarting the normal song. Actual stack height and other
+gameplay behavior are retained. PINCH ON follows the original thresholds.
 
 B-TYPE's Danger/Peril versions omit the opening 192 music ticks (about 3.2
 seconds at normal speed). The first two sections of each tonal part last 96
@@ -150,6 +167,8 @@ pointer without this bound would overwrite the patch's control state.
 | `$DF97` | Native NR51 routing snapshot for the current audio update |
 | `$DF98` | GB variant: 0 normal, 1 Danger, 2 Peril |
 | `$DF99` | Fractional music-clock phase, 0..3 |
+| `$DF9A` | PINCH enabled, initialized to 1 |
+| `$DF9B..DF9C` | Temporary glyph row mask/counter during menu initialization |
 
 While imported BGM plays, native BGM voices are stopped, but DX continues advancing
 its SFX. Native hardware-channel flags at `$DEA0`, `$DEB8`, `$DED0`, and `$DEE8`
@@ -205,7 +224,9 @@ It navigates through profile creation and Guest selection using normal buttons.
 It checks Game Boy and Game Boy Color execution, selection debounce, both menu
 handlers, six previews, OFF, three Marathon music selections, pause/resume, native
 SFX ownership, ROM checksums, and original input hashes. Regression checks verify
-that mode-row Select leaves menu music alone, the extended border and MUSIC-A/B
+that mode-row Left/Right cannot switch sets, music-focus Left/Right switches
+once per press, Select changes only PINCH, its default is ON, and its strip
+tracks the setting in either focus. They check that the extended border and MUSIC-A/B
 label are correct with both focus states and all song selections, all seven
 inactive letters have matching sprites, and only the pulse-selection call
 changes in the DX sound-driver bank.
@@ -235,6 +256,12 @@ the start and on repeats while the normal song still matches the original ROM.
 Pause and
 SFX ownership/restoration checks also run with the faster variants. Results and
 screenshots are regenerated in `output/validation`.
+
+PINCH OFF checks use normal menu buttons to choose each set and A/B/C/OFF, then
+exercise the real height routine at 0, 11, 14, 17, and 18 rows in both directions.
+They verify only normal-music requests, no DX/GB song restarts, silence for music
+OFF, and preserved pause/resume. PINCH ON checks include the native final alarm
+and transitions back from it.
 
 `gb_disasm.py ROM START END` disassembles an offset range using hex (`0x...`) or
 decimal addresses. `inspect_dx.py --rom ROM --steps '600,start,120,...'` captures

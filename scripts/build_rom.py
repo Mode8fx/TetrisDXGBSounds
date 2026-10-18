@@ -1,4 +1,4 @@
-"""Build Tetris DX with a Select-controlled original-Tetris music bank.
+"""Build Tetris DX with selectable original-Tetris music and a PINCH setting.
 
 Only Python's standard library is required. Input revisions are checked by SHA-256.
 See scripts/ROM_NOTES.md for the verified hook addresses and memory layout.
@@ -28,6 +28,11 @@ FORCE_RESTART, RESTORE_ALL = 0xDF95, 0xDF96
 NATIVE_PAN = 0xDF97
 MUSIC_VARIANT = 0xDF98  # 0 normal, 1 Danger, 2 Peril
 MUSIC_PHASE = 0xDF99  # fractional clock: +variant/4 music ticks per frame
+PINCH_ENABLED, GLYPH_BITS, GLYPH_ROWS = 0xDF9A, 0xDF9B, 0xDF9C
+# Menu BG tiles unused by both the color and monochrome layouts. Positive
+# signed-mode IDs reside at $9000+, outside sprite tile memory.
+PINCH_TILES = bytes([0x24,0x26,0x27,0x28,0x2D,0x2E,0x2F,0x38,0x3A,0x3B,
+                     0x3C,0x3D,0x3E,0x3F,0x44,0x45,0x46,0x47,0x48,0x4B])
 VARIANTS = [('Normal', 0), ('Danger', 2), ('Peril', 4)]
 NEW_MUSIC, CURRENT_MUSIC = 0xDF78, 0xDF79
 START_MUSIC, PLAY_MUSIC, MUTE = 0x6A21, 0x6C44, 0x69C7
@@ -77,6 +82,8 @@ def control_code():
     c.mark('init')
     c.emit('af')
     for var in [ENABLED, ACTIVE, PAUSED, LAST_ID, FORCE_RESTART, RESTORE_ALL, NATIVE_PAN, MUSIC_VARIANT, MUSIC_PHASE]: c.store_a(var)
+    c.emit('3e 01')
+    c.store_a(PINCH_ENABLED)
     c.jp(0x3F00)
 
     # All expanded-bank execution is interrupt protected. MBC1's high bank
@@ -344,19 +351,19 @@ def control_code():
     c.jp(0x4178)  # original pulse-2 selector, registers $FF16..19
 
     c.mark('menu_modes')
-    c.call('toggle')
+    c.call('toggle_pinch')
     c.jp(0x4C6F)
     c.mark('menu_music')
+    c.call('toggle_pinch')
     c.call('toggle')
     c.jp(0x4CAB)
     c.mark('toggle')
-    c.emit('f0 83 e6 04 c8')  # Newly pressed Select, not the held-key mask.
+    c.emit('f0 83 e6 30 c8')  # Newly pressed Left/Right, only in music focus.
+    c.ld_a(0xDB0E)
+    c.emit('a7 c8')
     c.ld_a(ENABLED)
     c.emit('ee 01')
     c.store_a(ENABLED)
-    # Changing the set on a mode row must not start a music preview.
-    c.ld_a(0xDB0E)
-    c.emit('a7 c8')
     # When music has focus, restart the selected preview immediately.
     c.ld_a(0xDB0D)
     c.emit('fe 04')
@@ -366,6 +373,27 @@ def control_code():
     c.mark('toggle_off')
     c.emit('01 00 00')
     c.jp('bgm_start')
+
+    c.mark('toggle_pinch')
+    c.emit('f0 83 e6 04 c8')  # Select changes PINCH in either menu focus.
+    c.ld_a(PINCH_ENABLED)
+    c.emit('ee 01')
+    c.store_a(PINCH_ENABLED)
+    c.emit('c9')
+
+    # Apply to DX and GB at the shared height decision. Conditional BGM APIs
+    # then retain the current normal song instead of restarting it each frame.
+    c.mark('height_music')
+    c.emit('f5')
+    c.ld_a(PINCH_ENABLED)
+    c.emit('a7')
+    c.op(0xCA,'height_normal')
+    c.emit('f1 fe 0b')
+    c.op(0xD2,0x4C50)
+    c.jp(0x4C4B)
+    c.mark('height_normal')
+    c.emit('f1')
+    c.jp(0x4C4B)
 
     # Menu initialization still has the LCD off. Extend the left edge one tile
     # and use seven font cells for MUSIC-A/B. Reuse the original border/font.
@@ -390,6 +418,21 @@ def control_code():
         c.op(0x11,destination)
         c.call('make_label_shadow')
     c.emit('e1 d1 c1')
+    # Bake both 80x8 PINCH labels onto copies of the original bottom-row
+    # tiles. Black glyph pixels are ORed into both background bitplanes.
+    c.emit('c5 d5 e5')
+    for state,text in enumerate([' PINCH:ON ',' PINCH:OFF']):
+        for column,char in enumerate(text):
+            c.op(0x21,0x9A20+column)
+            c.emit('7e ee 80 6f 26 00 29 29 29 29')
+            c.op(0x01,0x8800)
+            c.emit('09')
+            c.op(0x11,0x9000+PINCH_TILES[state*10+column]*16)
+            if char == ':': c.op(0x01,'pinch_colon_bits')
+            else: c.op(0x01,(0x97F0 if char == ' ' else 0x8800+(ord(char)-ord('A'))*16)+1)
+            c.call('draw_pinch_tile')
+    c.emit('e1 d1 c1')
+    c.call('draw_pinch_map')
     # CGB reads bit 0 back as zero after selecting VRAM bank 0; DMG reads
     # $FF. Only CGB has attribute RAM, so skip these writes on DMG/SGB.
     c.emit('f0 4f e6 01')
@@ -406,6 +449,43 @@ def control_code():
     c.emit('23 2a 2f 12 13 2f 12 13 05')
     c.op(0xC2,'label_shadow_row')
     c.emit('c9')
+
+    c.mark('draw_pinch_tile')
+    c.emit('3e 08')
+    c.store_a(GLYPH_ROWS)
+    c.mark('pinch_glyph_row')
+    c.emit('0a 03 03')
+    c.store_a(GLYPH_BITS)
+    for _ in range(2):
+        c.emit('2a e5')
+        c.op(0x21,GLYPH_BITS)
+        c.emit('b6 e1 12 13')
+    c.ld_a(GLYPH_ROWS)
+    c.emit('3d')
+    c.store_a(GLYPH_ROWS)
+    c.op(0xC2,'pinch_glyph_row')
+    c.emit('c9')
+    c.mark('pinch_colon_bits')
+    c.emit('00 00 00 00 18 00 00 00 00 00 18 00 00 00 00 00')
+
+    c.mark('draw_pinch_map')
+    c.emit('c5 d5 e5')
+    c.ld_a(PINCH_ENABLED)
+    c.emit('a7')
+    c.op(0x21,'pinch_on_map')
+    c.op(0xC2,'pinch_map_ready')
+    c.op(0x21,'pinch_off_map')
+    c.mark('pinch_map_ready')
+    c.op(0x11,0x9A20)
+    c.emit('06 0a')
+    c.mark('pinch_map_tile')
+    c.emit('2a 12 13 05')
+    c.op(0xC2,'pinch_map_tile')
+    c.emit('e1 d1 c1 c9')
+    c.mark('pinch_on_map')
+    c.data.extend(PINCH_TILES[:10])
+    c.mark('pinch_off_map')
+    c.data.extend(PINCH_TILES[10:])
 
     # Keep all seven letters in the original label's focus/highlight behavior.
     c.mark('label_sprites_dmg')
@@ -439,6 +519,7 @@ def control_code():
     c.ld_a(ENABLED)
     c.emit('c6 80')  # font A = $80 (DX), B = $81 (GB)
     c.store_a(0x99A9)
+    c.call('draw_pinch_map')
     c.emit('f1 e0 4f')
     c.ld_a(0xC0A8)
     c.jp(0x4C64)
@@ -530,6 +611,8 @@ def build(dx: bytes, original: bytes):
     hook(0x14D6C, 'cd b5 05', 'label_sprites')
     hook(0x14DB5, 'cd 9b 43', 'label_sprites_dmg')
     hook(0x14C61, 'fa a8 c0', 'indicator', 0xC3)
+    patch(0x4C47, 'fe 0b 30 05', bytes([0xC3])+code.labels['height_music'].to_bytes(2,'little')+bytes(1),
+          'PINCH setting gates high-stack music for both sets')
     hook(0x30B0C, 'cd 78 41', 'select_effect_pulse')
     rom[0x148] = 0x05  # 1 MiB, still MBC1 + RAM + battery.
     rom[0x14D] = (-sum(rom[0x134:0x14D])-25) & 0xFF

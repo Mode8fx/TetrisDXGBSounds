@@ -11,7 +11,7 @@ from pyboy import PyBoy
 
 from build_rom import (ROOT, DX_NAME, GB_NAME, OUTPUT_NAME, HASHES, ENABLED,
                        ACTIVE, PAUSED, LAST_ID, ENGINE_BANK, CURRENT_MUSIC,
-                       MUSIC_VARIANT, MUSIC_PHASE, START_MUSIC)
+                       MUSIC_VARIANT, MUSIC_PHASE, START_MUSIC, PINCH_ENABLED, PINCH_TILES)
 from build_rom import control_code
 
 OUT = ROOT/'output'/'validation'
@@ -72,42 +72,61 @@ def ui_checks(path, cgb):
         if cgb:
             assert bytes(gb.memory[1,0x99A3:0x99AA]) == bytes([7])*7
             assert gb.memory[1,0x99A2] == 1, 'Border palette changed'
+        assert bytes(gb.memory[0,0x9A20:0x9A2A]) == (
+            PINCH_TILES[:10] if gb.memory[PINCH_ENABLED] else PINCH_TILES[10:]), 'PINCH strip does not reflect setting'
         if not gb.memory[0xDB0E]:
             sprites = [tuple(gb.memory[a:a+4]) for a in range(0xFE00,0xFEA0,4)]
             for x,tile in zip(range(0x20,0x51,8),[0xB0,0xB1,0xB2,0xB3,0xB4,0x9B,0xC8+gb.memory[ENABLED]]):
                 assert (0x78,x,tile,0x14 if cgb else 0) in sprites, 'Highlight must cover all seven characters at the new position'
     gb.screen.image.save(OUT/f'{mode}-dx-menu.png')
-    assert gb.memory[ENABLED] == 0
+    assert gb.memory[ENABLED] == 0 and gb.memory[PINCH_ENABLED] == 1
     menu_song = gb.memory[0xDC9B]
     check_music_tab()
+    for button in ['left','right']:
+        press(gb,button,hold=20)
+        assert gb.memory[ENABLED] == 0 and gb.memory[ACTIVE] == 0, 'Mode rows must not switch music sets'
     press(gb,'select',hold=120)
-    assert gb.memory[ENABLED] == 1, 'Held Select must toggle only once'
-    assert gb.memory[ACTIVE] == 0, 'Mode-row Select must not start a preview'
-    assert gb.memory[0xDC9B] == menu_song, 'Mode-row Select must retain menu music'
+    assert gb.memory[PINCH_ENABLED] == 0, 'Held Select must toggle PINCH only once'
+    assert gb.memory[ENABLED] == 0 and gb.memory[ACTIVE] == 0
+    assert gb.memory[0xDC9B] == menu_song, 'PINCH change must retain menu music'
     check_music_tab()
+    gb.screen.image.save(OUT/f'{mode}-pinch-off.png')
+    press(gb,'select')
+    assert gb.memory[PINCH_ENABLED] == 1
+    press(gb,'a')
+    assert gb.memory[ACTIVE] == 0 and gb.memory[0xDB0E] == 1
+    press(gb,'right',hold=120)
+    assert gb.memory[ENABLED] == 1, 'Held Right must switch only once'
+    assert gb.memory[ACTIVE] == 1 and gb.memory[CURRENT_MUSIC] == 5
     gb.tick(1,True,False)
     gb.screen.image.save(OUT/f'{mode}-gb-menu.png')
-    press(gb,'a')
-    assert gb.memory[ACTIVE] == 1 and gb.memory[CURRENT_MUSIC] == 5, 'Entering music focus must preview the selected GB set'
     check_music_tab()
     gb.screen.image.save(OUT/f'{mode}-gb-music-focus.png')
     press(gb,'b')
     assert gb.memory[0xDB0E] == 0 and gb.memory[ACTIVE] == 0
-    press(gb,'select')
-    assert gb.memory[ENABLED] == 0 and gb.memory[ACTIVE] == 0
+    for button in ['left','right']:
+        press(gb,button)
+        assert gb.memory[ENABLED] == 1 and gb.memory[ACTIVE] == 0
     assert gb.memory[0xDC9B] == menu_song
 
     # Music focus is a separate menu input routine; verify both hooks.
     press(gb,'a')
     assert gb.memory[0xDB0E] == 1
-    for enabled in [1,0]:
-        press(gb,'select')
+    for enabled,button in [(0,'left'),(1,'right'),(0,'right')]:
+        press(gb,button)
         assert gb.memory[ENABLED] == enabled
         check_music_tab()
         gb.screen.image.save(OUT/f'{mode}-{"gb" if enabled else "dx"}-music-focus.png')
+    native_song = gb.memory[0xDC9B]
+    press(gb,'select',hold=120)
+    assert gb.memory[PINCH_ENABLED] == 0 and gb.memory[ENABLED] == 0
+    assert gb.memory[0xDC9B] == native_song
+    check_music_tab()
+    press(gb,'select')
+    assert gb.memory[PINCH_ENABLED] == 1
     # Native and imported A/B/C, and OFF, using only menu buttons.
     for enabled in [0,1]:
-        if gb.memory[ENABLED] != enabled: press(gb,'select')
+        if gb.memory[ENABLED] != enabled: press(gb,'right')
         for selection in [1,2,3,4]:
             while gb.memory[0xDB0D] > selection: press(gb,'up')
             while gb.memory[0xDB0D] < selection: press(gb,'down')
@@ -115,9 +134,9 @@ def ui_checks(path, cgb):
             if selection == 4:
                 assert gb.memory[ACTIVE] == 0
                 assert sound_energy(gb,120) == 0, 'OFF must silence the BGM'
-                press(gb,'select')
+                press(gb,'right')
                 assert gb.memory[ACTIVE] == 0
-                press(gb,'select')
+                press(gb,'right')
             elif enabled:
                 assert gb.memory[ACTIVE] == 1
                 assert gb.memory[CURRENT_MUSIC] == selection+4
@@ -134,7 +153,7 @@ def ui_checks(path, cgb):
         restore(gb,initial)
         press(gb,'a')
         for _ in range(selection-1): press(gb,'down')
-        press(gb,'select')
+        press(gb,'right')
         press(gb,'a',settle=120)  # Level selection
         assert gb.memory[ACTIVE] == 0, 'Level selection retains native menu music'
         press(gb,'a',settle=120)  # Gameplay
@@ -142,8 +161,9 @@ def ui_checks(path, cgb):
         assert gb.memory[CURRENT_MUSIC] == selection+4
         assert gb.memory[LAST_ID] == selection+0x43
         assert sound_energy(gb) > 0
+        press(gb,'right')
         press(gb,'select')
-        assert gb.memory[ENABLED] == 1, 'Select outside the menu must not toggle music sets'
+        assert gb.memory[ENABLED] == 1 and gb.memory[PINCH_ENABLED] == 1, 'Gameplay controls must not change menu settings'
         press(gb,'start',settle=90)
         assert gb.memory[PAUSED] == 1
         paused_state = bytes(gb.memory[0xDF20:0xDF60])
@@ -206,7 +226,7 @@ def ui_checks(path, cgb):
         assert gb.memory[ACTIVE] == 1 and gb.memory[CURRENT_MUSIC] == selection+4
         gb.screen.image.save(OUT/f'{mode}-gameplay-{selection}.png')
     gb.stop(save=False)
-    return f'{mode}: extended MUSIC-A/B tab, palettes/highlights, mode-row Select stays silent, preview toggles/OFF, gameplay, pause/resume, original SFX ownership and stereo routing passed'
+    return f'{mode}: music-focus Left/Right switching, mode-row lockout, Select PINCH toggle/default/strip, palettes/highlights, preview/OFF, gameplay, pause/resume and SFX passed'
 
 
 def note_trace(gb, bank, ram_shift):
@@ -263,7 +283,7 @@ def mix_checks(path, cgb):
     for imported in [False,True]:
         restore(gb,menu)
         press(gb,'a')
-        if imported: press(gb,'select')
+        if imported: press(gb,'right')
         press(gb,'a',settle=120)
         press(gb,'a',settle=120)
         gameplay = snapshot(gb)
@@ -293,7 +313,7 @@ def sharing_checks(path,cgb,variant=0):
     gb = emulator(path,cgb)
     boot_menu(gb)
     press(gb,'a')
-    press(gb,'select')
+    press(gb,'right')
     press(gb,'a',settle=120)
     press(gb,'a',settle=120)
     if variant:
@@ -400,7 +420,7 @@ def melody_checks(path, frames):
         for _ in range(selection-1): press(dx,'down')
         # Collect before Select so the very first note is included.
         actual, dx_ticks = note_trace(dx,ENGINE_BANK,-0x70)
-        press(dx,'select')
+        press(dx,'right')
         dx.tick(frames,False,False)
         dx.hook_deregister(ENGINE_BANK,0x6C44)
         dx.hook_deregister(ENGINE_BANK,0x6D34)
@@ -453,20 +473,20 @@ def variant_checks(path, cgb, frames):
             restore(gb,mode_menu)
             press(gb,'a')
             for _ in range(selection-1): press(gb,'down')
-            if imported: press(gb,'select')
+            if imported: press(gb,'right')
             height[0] = 0
             press(gb,'a',settle=120)
             press(gb,'a',settle=120)
-            stopped_native_id = gb.memory[0xDC9B]
-            for h,variant in [(11,1),(14,2),(11,1),(0,0)]:
+            for h,variant in [(11,1),(14,2),(17,3),(14,2),(11,1),(0,0)]:
+                stopped_native_id = gb.memory[0xDC9B]
                 height[0] = h
                 requests.clear()
                 starts.clear()
                 gb.tick(20,False,False)
-                song = (selection+0x43 if variant == 0 else
+                song = (selection+0x43 if variant == 0 else 0x4C if variant == 3 else
                         0x5A+2*(selection-1)+variant-1) if selection<4 else 0
                 assert requests and set(requests) == {song}, (h,requests)
-                if imported and selection<4:
+                if imported and selection<4 and variant<3:
                     assert gb.memory[ACTIVE] and gb.memory[LAST_ID] == song
                     assert gb.memory[CURRENT_MUSIC] == selection+4
                     assert gb.memory[MUSIC_VARIANT] == variant
@@ -492,7 +512,7 @@ def variant_checks(path, cgb, frames):
 
     restore(gb,mode_menu)
     press(gb,'a')
-    press(gb,'select')
+    press(gb,'right')
     music_menu = snapshot(gb)
     def record(song,variant,length):
         restore(gb,music_menu)
@@ -555,6 +575,60 @@ def variant_checks(path, cgb, frames):
     return f'{"cgb" if cgb else "dmg"}: all GB Danger/Peril tracks, pitch, synchronized 1.25x/1.5x tempo, B intro skipped at start/loop with percussion aligned, native height transitions, return to normal, pause/resume, DX set and OFF verified'
 
 
+def pinch_checks(path,cgb):
+    """PINCH OFF keeps every song normal at every high-stack threshold."""
+    gb = emulator(path,cgb)
+    boot_menu(gb)
+    menu = snapshot(gb)
+    symbols = control_code().labels
+    height,requests,starts = [0],[],[]
+    def force_height(_):
+        gb.memory[0xAF98] = height[0]
+        gb.memory[0xAF99] = 255
+    def requested(_): requests.append(gb.register_file.C)
+    def started(kind): starts.append(kind)
+    gb.hook_register(1,0x4C40,force_height,None)
+    gb.hook_register(0,0x3F18,requested,None)
+    gb.hook_register(0,symbols['original_bgm'],started,'GB')
+    gb.hook_register(12,0x4284,started,'DX')
+    for imported in [False,True]:
+        for selection in [1,2,3,4]:
+            restore(gb,menu)
+            press(gb,'a')
+            for _ in range(selection-1): press(gb,'down')
+            if imported: press(gb,'right')
+            press(gb,'select')
+            assert gb.memory[PINCH_ENABLED] == 0
+            height[0] = 0
+            press(gb,'a',settle=120)
+            press(gb,'a',settle=120)
+            assert gb.memory[PINCH_ENABLED] == 0, 'PINCH must persist into gameplay'
+            starts.clear()
+            for h in [0,11,14,17,18,14,11,0]:
+                height[0] = h
+                requests.clear()
+                gb.tick(20,False,False)
+                song = selection+0x43 if selection<4 else 0
+                assert requests and set(requests) == {song}, ('PINCH OFF requested a high-stack song',imported,selection,h,requests)
+                if imported and selection<4:
+                    assert gb.memory[ACTIVE] and gb.memory[LAST_ID] == song
+                    assert gb.memory[MUSIC_VARIANT] == 0 and gb.memory[CURRENT_MUSIC] == selection+4
+                else:
+                    assert gb.memory[ACTIVE] == 0
+                    if song: assert gb.memory[0xDC9B] == song
+                assert not starts, 'PINCH OFF restarted the normal song at a height change'
+            if selection == 4:
+                assert sound_energy(gb,30) == 0, 'Music OFF must remain silent with PINCH OFF'
+            else:
+                assert sound_energy(gb,30)>0
+                press(gb,'start',settle=30)
+                assert gb.memory[PINCH_ENABLED] == 0 and sound_energy(gb,30) == 0
+                press(gb,'start',settle=30)
+                assert gb.memory[PINCH_ENABLED] == 0 and sound_energy(gb,30)>0
+    gb.stop(save=False)
+    return f'{"cgb" if cgb else "dmg"}: PINCH OFF suppresses Danger/Peril/final alarm for DX and GB A/B/C; normal songs do not restart, music OFF and pause/resume preserved'
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--rom',type=Path,default=ROOT/'output'/OUTPUT_NAME)
@@ -577,6 +651,7 @@ def main():
     report.extend(melody_checks(args.rom,args.frames))
     report.extend([variant_checks(args.rom,True,args.frames),
                    variant_checks(args.rom,False,args.frames)])
+    report.extend([pinch_checks(args.rom,True),pinch_checks(args.rom,False)])
     import hashlib
     for name,digest in HASHES.items():
         assert hashlib.sha256((ROOT/'original_roms'/name).read_bytes()).hexdigest() == digest
