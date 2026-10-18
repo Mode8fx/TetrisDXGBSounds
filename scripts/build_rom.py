@@ -29,6 +29,8 @@ NATIVE_PAN = 0xDF97
 NEW_MUSIC, CURRENT_MUSIC = 0xDF78, 0xDF79
 START_MUSIC, PLAY_MUSIC, MUTE = 0x6A21, 0x6C44, 0x69C7
 ENGINE_BANK = 0x21  # MBC1 cannot map bank $20 into the upper ROM window.
+
+
 class Code:
     """Tiny label/fixup emitter: keeps the injected machine code reviewable."""
     def __init__(self, origin):
@@ -280,6 +282,31 @@ def control_code():
     c.ld_a(0xDF4F)
     c.emit('e6 80 c0 3e 40 e0 1c c9')
 
+    # At DX's pulse-2 selection call, HL points to the virtual voice's
+    # instrument type (+$0B). Route only movement/rotation SFX to pulse 1.
+    # The original selectors initialize the same channel state and I/O base;
+    # all note streams, envelopes, priorities and durations remain native.
+    c.mark('select_effect_pulse')
+    c.ld_a(ACTIVE)
+    c.emit('a7')
+    c.op(0xCA,'native_pulse_2')
+    c.ld_a(PAUSED)
+    c.emit('a7')
+    c.op(0xC2,'native_pulse_2')
+    c.ld_a(0xDC80)
+    c.emit('e6 20')  # SFX processing, not a native background-music voice
+    c.op(0xCA,'native_pulse_2')
+    c.emit('2b 2b 2b 2b 2b 2b 2a fe 21')  # voice ID at +5, HL now +6
+    c.op(0xCA,'piece_effect_pulse')
+    c.emit('fe 22')
+    c.op(0xC2,'native_pulse_2')
+    c.mark('piece_effect_pulse')
+    c.emit('7e a7')  # upper byte of the sound ID must be zero
+    c.op(0xC2,'native_pulse_2')
+    c.jp(0x416F)  # native pulse-1 selector, registers $FF10..14
+    c.mark('native_pulse_2')
+    c.jp(0x4178)  # original pulse-2 selector, registers $FF16..19
+
     c.mark('menu_modes')
     c.call('toggle')
     c.jp(0x4C6F)
@@ -370,6 +397,7 @@ def build(dx: bytes, original: bytes):
     hook(0x14C48, 'cd 6f 4c', 'menu_modes')
     hook(0x14C5B, 'cd ab 4c', 'menu_music')
     hook(0x14C61, 'fa a8 c0', 'indicator', 0xC3)
+    hook(0x30B0C, 'cd 78 41', 'select_effect_pulse')
     rom[0x148] = 0x05  # 1 MiB, still MBC1 + RAM + battery.
     rom[0x14D] = (-sum(rom[0x134:0x14D])-25) & 0xFF
     rom[0x14E:0x150] = b'\0\0'

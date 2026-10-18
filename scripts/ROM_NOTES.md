@@ -17,7 +17,7 @@ IDs are `$44..46`. These native table entries and all native song data are retai
 | --- | --- | --- |
 | `$3F00` | Initialize sound | Called after patch state is cleared at startup |
 | `$3F06` | Advance audio | Runs first every frame, retaining native SFX |
-| `$3F0C` | Play SFX | Unmodified; original effect data, driver, volume, and channels retained |
+| `$3F0C` | Play SFX | Entry unmodified; original effect data and volume retained; pulse selection adjusted below |
 | `$3F12` | Start BGM | Intercepts only the six music IDs when GB is enabled |
 | `$3F18` | Start BGM if different | Preserves conditional restart behavior |
 | `$3F24` | Suspend BGM | Also freezes and mutes the original player |
@@ -113,9 +113,18 @@ the effect's waveform.
 ## Original effects and channel handoff
 
 Native rotation (`$21`) uses both a wave voice and pulse 2; movement (`$22`) and
-blocked actions (`$28`) use pulse 2. These original choices are retained along
-with the original effect streams, note lengths, and full volume. Bank `$0C`,
-including the sound driver and sound-effect table, is byte-for-byte unchanged.
+blocked actions (`$28`) use pulse 2. During active, unpaused GB music, movement
+and rotation's pulse voice use pulse 1 instead. Rotation retains its wave voice;
+blocked actions and other effects retain their native assignments. DX music
+keeps all native assignments.
+
+The call at ROM `$030B0C` (bank `$0C`, CPU `$4B0C`) normally selects pulse 2 via
+`$4178`. Its replacement checks the GB player's active/pause flags, native SFX
+processing flag (`$DC80` bit 5), and virtual voice ID (`+$05..06`). Only SFX IDs
+`$0021` and `$0022` select pulse 1 via `$416F`. Both native selectors initialize
+the hardware voice and register base before the original driver continues.
+This three-byte call is the only change in bank `$0C`. The original effect
+streams, note lengths, priorities, envelopes, and full volume are retained.
 There are no replacement effects or attenuation hooks.
 
 After each native audio update, the bridge snapshots NR51 and advances the GB
@@ -139,9 +148,12 @@ It checks Game Boy and Game Boy Color execution, selection debounce, both menu
 handlers, six previews, OFF, three Marathon music selections, pause/resume, native
 SFX ownership, ROM checksums, and original input hashes. Regression checks verify
 that mode-row Select leaves menu music alone, both former indicator cells contain
-spaces, and the original DX sound-driver bank is unchanged. Mixer hooks check
+spaces, and only the pulse-selection call changes in the DX sound-driver bank.
+Mixer hooks check
 that pulse/noise envelope values and the wave-volume conversion retain their
-native values with both music sets. Channel-sharing checks exercise the original
+native values with both music sets. Movement/rotation channel checks verify
+pulse 1 with GB music and pulse 2 with DX music, retaining rotation's wave voice
+and blocked actions' pulse 2. Channel-sharing checks exercise the original
 piece effects, verify their hardware channel usage, and compare music state with
 a run without effects. A deliberately left-routed effect checks that music does
 not override its routing. Released notes must be restored in the same audio

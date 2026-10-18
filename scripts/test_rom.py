@@ -214,6 +214,15 @@ def mix_checks(path, cgb):
     menu = snapshot(gb)
     errors, counts = [], {'pulse/noise':0,'wave':0}
     pending_volume, pending_wave = [], []
+    desired_id, effect_channels = [0x21], set()
+    symbols = control_code().labels
+    def native_done(_):
+        for channel,base in enumerate([0xDEA0,0xDEB8,0xDED0,0xDEE8]):
+            if not gb.memory[base]&0x80: continue
+            voice = gb.memory[base+4] | gb.memory[base+5]<<8
+            if (gb.memory[voice+5] | gb.memory[voice+6]<<8) == desired_id[0]:
+                effect_channels.add(channel)
+    gb.hook_register(0,symbols['frame_native_done'],native_done,None)
     def volume_before(_):
         pending_volume[:] = [gb.register_file.B,gb.memory[0xDC94]]
     def volume_after(_):
@@ -242,22 +251,27 @@ def mix_checks(path, cgb):
         gameplay = snapshot(gb)
         # Feed representative native effects through the normal SFX API. This
         # covers pulse, noise, and wave effects without arranging line clears.
-        desired_id = [0x21]
         def request(_): gb.register_file.C = desired_id[0]
         gb.hook_register(0,0x3F0C,request,None)
         for sound_id in [0x21,0x22,0x23,0x24,0x25,0x27,0x28,0x2B,0x2C,0x2D,0x2F,0x34,0x3C]:
             restore(gb,gameplay)
             desired_id[0] = sound_id
+            effect_channels.clear()
             press(gb,'a',settle=40)
+            expected = {0x21: {0 if imported else 1,2},
+                        0x22: {0 if imported else 1}, 0x28: {1}}
+            if sound_id in expected:
+                assert effect_channels == expected[sound_id], (
+                    f'Effect {sound_id:02x}, GB={imported}: channels {effect_channels}')
         gb.hook_deregister(0,0x3F0C)
     assert not errors, errors[:3]
     assert all(counts.values()), f'Did not exercise all native volume paths: {counts}'
     gb.stop(save=False)
-    return f'{"cgb" if cgb else "dmg"}: original pulse/noise and wave SFX volumes preserved with both music sets'
+    return f'{"cgb" if cgb else "dmg"}: native SFX volumes preserved; movement/rotation use pulse 1 with GB and pulse 2 with DX'
 
 
 def sharing_checks(path,cgb):
-    """SFX use their native channels while the GB score keeps its timing."""
+    """Piece SFX use the requested channels while the score keeps its timing."""
     gb = emulator(path,cgb)
     boot_menu(gb)
     press(gb,'a')
@@ -326,7 +340,7 @@ def sharing_checks(path,cgb):
     gb.hook_register(0,symbols['frame_native_done'],native_done,None)
     gb.hook_register(0,symbols['frame_mix_done'],mix_done,None)
     for channel in range(4): gb.hook_register(0,symbols[f'restore_{channel}'],restored,channel)
-    for sound_id,channels in [(0x21,{1,2}),(0x22,{1}),(0x28,{1})]:
+    for sound_id,channels in [(0x21,{0,2}),(0x22,{0}),(0x28,{1})]:
         restore(gb,gameplay)
         current.clear()
         previous.clear()
@@ -337,7 +351,7 @@ def sharing_checks(path,cgb):
             if frame == 5: gb.button_release('a')
             gb.tick(1,False,False)
             assert music_state() == expected[frame], f'Effect {sound_id:02x} changed GB score timing/state'
-        assert observed == channels, f'Effect {sound_id:02x} changed native channel usage: {observed}'
+        assert observed == channels, f'Effect {sound_id:02x} used incorrect channels: {observed}'
     restore(gb,gameplay)
     current.clear()
     previous.clear()
@@ -347,7 +361,7 @@ def sharing_checks(path,cgb):
     assert rest_checked, 'Did not exercise wave-channel release during a music rest'
     assert routed and released and not errors, errors[:3]
     gb.stop(save=False)
-    return f'{"cgb" if cgb else "dmg"}: original SFX channels/routing, score timing and music/waveform restoration (including rests) verified'
+    return f'{"cgb" if cgb else "dmg"}: GB movement/rotation pulse-1 routing, score timing and music/waveform restoration (including rests) verified'
 
 
 def melody_checks(path, frames):
@@ -400,7 +414,8 @@ def main():
     OUT.mkdir(parents=True,exist_ok=True)
     rom = args.rom.read_bytes()
     original_dx = (ROOT/'original_roms'/DX_NAME).read_bytes()
-    assert rom[0x30000:0x34000] == original_dx[0x30000:0x34000], 'Native DX sound driver and SFX must remain unmodified'
+    assert (rom[0x30000:0x30B0C] == original_dx[0x30000:0x30B0C]
+            and rom[0x30B0F:0x34000] == original_dx[0x30B0F:0x34000]), 'Only the pulse-selection call may change in DX audio bank; effect data and mixer must remain original'
     assert len(rom) == 1024*1024 and rom[0x148] == 5
     assert rom[0x14D] == (-sum(rom[0x134:0x14D])-25)&255
     assert int.from_bytes(rom[0x14E:0x150],'big') == (sum(rom)-sum(rom[0x14E:0x150]))&65535
