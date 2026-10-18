@@ -38,15 +38,34 @@ The game/music menu is state `$04`. Its code is in bank `$05`:
 | --- | --- |
 | `$014C48` | Mode-row input call, originally to CPU `$4C6F` |
 | `$014C5B` | Music-row input call, originally to CPU `$4CAB` |
-| `$014C61` | VBlank display routine, blanks the former indicator cells |
+| `$014C01` | Initialize the extended music tab before enabling the LCD |
+| `$014C61` | VBlank display routine, updates the A/B suffix |
+| `$014D6C` | Draw the seven-character inactive label on CGB |
+| `$014DB5` | Draw the seven-character inactive label on DMG/SGB |
 
 Select is bit 2 of the newly pressed input mask at `$FF83`. Both input wrappers
 check this bit and flip the set. Only when `$DB0E` indicates music focus does the
 wrapper restart the selected preview. Selecting the set on a mode row leaves the
 existing menu music playing. Holding Select switches once. OFF remains silent
 when the set changes. Original input handling continues after the wrapper. The
-display wrapper writes the space character `$7F` into `$99A9` and `$99AA` during
-the existing menu VBlank routine, preserving the VRAM bank.
+display wrapper writes font tile `$80` (A, DX) or `$81` (B, GB) at `$99A9`
+during the existing menu VBlank routine, preserving the VRAM bank.
+
+The tab's left edge moves one tile (8 pixels) left. With the LCD off, the
+initialization wrapper reuses border tiles `$29/$39/$49` at column 2 and fills
+the former edge at column 3. The seven font cells at `$99A3..99A9` read MUSIC-A/B;
+the hyphen is `$9F`. CGB attributes use the original text palette 7, with border
+palette 1 retained. Attribute writes are skipped on DMG/SGB by checking that
+VRAM bank 0 can be selected.
+
+The original inactive MUSIC sprites use a different font color from the focused
+background label. Seven-character sprite lists preserve that treatment for the
+whole new label, with separate CGB and DMG attributes. At menu initialization,
+font glyphs for -, A and B are converted to that sprite color in three otherwise
+unused menu tiles (`$9B/$C8/$C9`). The CGB wrapper replaces the label drawing
+call; the DMG wrapper replaces only the inactive label and retains the native
+song cursor when music has focus. Original ROM graphics and other menus' sprite
+lists remain intact.
 
 ## Original player and ROM banking
 
@@ -186,8 +205,10 @@ It navigates through profile creation and Guest selection using normal buttons.
 It checks Game Boy and Game Boy Color execution, selection debounce, both menu
 handlers, six previews, OFF, three Marathon music selections, pause/resume, native
 SFX ownership, ROM checksums, and original input hashes. Regression checks verify
-that mode-row Select leaves menu music alone, both former indicator cells contain
-spaces, and only the pulse-selection call changes in the DX sound-driver bank.
+that mode-row Select leaves menu music alone, the extended border and MUSIC-A/B
+label are correct with both focus states and all song selections, all seven
+inactive letters have matching sprites, and only the pulse-selection call
+changes in the DX sound-driver bank.
 Mixer hooks check
 that pulse/noise envelope values and the wave-volume conversion retain their
 native values with both music sets. Movement/rotation channel checks verify

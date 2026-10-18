@@ -367,13 +367,78 @@ def control_code():
     c.emit('01 00 00')
     c.jp('bgm_start')
 
-    # Menu display routine runs in VBlank. Preserve the VRAM bank and keep
-    # its original entry instructions so no LCD-time writes are introduced.
+    # Menu initialization still has the LCD off. Extend the left edge one tile
+    # and use seven font cells for MUSIC-A/B. Reuse the original border/font.
+    c.mark('menu_layout')
+    c.store_a(0xC0A8)  # displaced initialization instruction
+    c.emit('f0 4f f5 af e0 4f')
+    for address,tile in [(0x9982,0x29),(0x9983,0x2A),(0x99A2,0x39),
+                         (0x99A3,0x8C),(0x99A4,0x94),(0x99A5,0x92),
+                         (0x99A6,0x88),(0x99A7,0x82),(0x99A8,0x9F),
+                         (0x99AA,0x7F),(0x99C2,0x49),(0x99C3,0x4A)]:
+        c.emit(f'3e {tile:02x}')
+        c.store_a(address)
+    c.ld_a(ENABLED)
+    c.emit('c6 80')
+    c.store_a(0x99A9)
+    # Extend the native inactive-label highlight with -, A and B glyphs.
+    # These three blank menu tiles have no tilemap/sprite users here. Convert
+    # font color 3 to the native MUSIC overlay's color 2, background color 1.
+    c.emit('c5 d5 e5')
+    for source,destination in [(0x89F0,0x89B0),(0x8800,0x8C80),(0x8810,0x8C90)]:
+        c.op(0x21,source)
+        c.op(0x11,destination)
+        c.call('make_label_shadow')
+    c.emit('e1 d1 c1')
+    # CGB reads bit 0 back as zero after selecting VRAM bank 0; DMG reads
+    # $FF. Only CGB has attribute RAM, so skip these writes on DMG/SGB.
+    c.emit('f0 4f e6 01')
+    c.op(0xC2,'menu_layout_done')
+    c.emit('3e 01 e0 4f 3e 07')
+    c.store_a(0x99A3)
+    c.store_a(0x99A9)
+    c.mark('menu_layout_done')
+    c.emit('f1 e0 4f c9')
+
+    c.mark('make_label_shadow')
+    c.emit('06 08')
+    c.mark('label_shadow_row')
+    c.emit('23 2a 2f 12 13 2f 12 13 05')
+    c.op(0xC2,'label_shadow_row')
+    c.emit('c9')
+
+    # Keep all seven letters in the original label's focus/highlight behavior.
+    c.mark('label_sprites_dmg')
+    c.ld_a(0xDB0E)
+    c.emit('a7')
+    c.op(0xC2,0x439B)  # retain the native song cursor when music has focus
+    c.jp('label_sprites_mono')
+    c.mark('label_sprites')
+    c.jp('label_sprites_color')
+    for style,attribute in [('color',0x14),('mono',0x00)]:
+        c.mark(f'label_sprites_{style}')
+        c.ld_a(ENABLED)
+        c.emit('a7')
+        c.op(0xCA,f'label_sprites_{style}_dx')
+        c.op(0x11,f'label_sprites_{style}_b')
+        c.jp(0x05B5)
+        c.mark(f'label_sprites_{style}_dx')
+        c.op(0x11,f'label_sprites_{style}_a')
+        c.jp(0x05B5)
+        for name,suffix in [('a',0xC8),('b',0xC9)]:
+            c.mark(f'label_sprites_{style}_{name}')
+            for x,tile in [(0x18,suffix),(0x10,0x9B),(8,0xB4),(0,0xB3),
+                           (0xF8,0xB2),(0xF0,0xB1),(0xE8,0xB0)]:
+                c.emit(f'f8 {x:02x} {tile:02x} {attribute:02x}')
+            c.emit('80')
+
+    # Menu display routine runs in VBlank. Refresh just the A/B suffix and
+    # preserve the VRAM bank and the routine's original entry instruction.
     c.mark('indicator')
     c.emit('f0 4f f5 af e0 4f')
-    c.emit('3e 7f')  # font's space character, in both former indicator cells
+    c.ld_a(ENABLED)
+    c.emit('c6 80')  # font A = $80 (DX), B = $81 (GB)
     c.store_a(0x99A9)
-    c.store_a(0x99AA)
     c.emit('f1 e0 4f')
     c.ld_a(0xC0A8)
     c.jp(0x4C64)
@@ -461,6 +526,9 @@ def build(dx: bytes, original: bytes):
     hook(0x3F2A, 'cd 60 3f', 'resume', 0xC3)
     hook(0x14C48, 'cd 6f 4c', 'menu_modes')
     hook(0x14C5B, 'cd ab 4c', 'menu_music')
+    hook(0x14C01, 'ea a8 c0', 'menu_layout')
+    hook(0x14D6C, 'cd b5 05', 'label_sprites')
+    hook(0x14DB5, 'cd 9b 43', 'label_sprites_dmg')
     hook(0x14C61, 'fa a8 c0', 'indicator', 0xC3)
     hook(0x30B0C, 'cd 78 41', 'select_effect_pulse')
     rom[0x148] = 0x05  # 1 MiB, still MBC1 + RAM + battery.

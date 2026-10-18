@@ -64,18 +64,33 @@ def ui_checks(path, cgb):
     boot_menu(gb)
     initial = snapshot(gb)
     mode = 'cgb' if cgb else 'dmg'
+    def check_music_tab():
+        suffix = 0x80+gb.memory[ENABLED]
+        assert bytes(gb.memory[0,0x9982:0x9984]) == bytes.fromhex('29 2a')
+        assert bytes(gb.memory[0,0x99C2:0x99C4]) == bytes.fromhex('49 4a')
+        assert bytes(gb.memory[0,0x99A2:0x99AB]) == bytes.fromhex('39 8c 94 92 88 82 9f')+bytes([suffix,0x7F]), 'Extended tab must read MUSIC-A (DX) or MUSIC-B (GB)'
+        if cgb:
+            assert bytes(gb.memory[1,0x99A3:0x99AA]) == bytes([7])*7
+            assert gb.memory[1,0x99A2] == 1, 'Border palette changed'
+        if not gb.memory[0xDB0E]:
+            sprites = [tuple(gb.memory[a:a+4]) for a in range(0xFE00,0xFEA0,4)]
+            for x,tile in zip(range(0x20,0x51,8),[0xB0,0xB1,0xB2,0xB3,0xB4,0x9B,0xC8+gb.memory[ENABLED]]):
+                assert (0x78,x,tile,0x14 if cgb else 0) in sprites, 'Highlight must cover all seven characters at the new position'
     gb.screen.image.save(OUT/f'{mode}-dx-menu.png')
     assert gb.memory[ENABLED] == 0
     menu_song = gb.memory[0xDC9B]
-    assert bytes(gb.memory[0,0x99A9:0x99AB]) == bytes([0x7F,0x7F])
+    check_music_tab()
     press(gb,'select',hold=120)
     assert gb.memory[ENABLED] == 1, 'Held Select must toggle only once'
     assert gb.memory[ACTIVE] == 0, 'Mode-row Select must not start a preview'
     assert gb.memory[0xDC9B] == menu_song, 'Mode-row Select must retain menu music'
+    check_music_tab()
     gb.tick(1,True,False)
     gb.screen.image.save(OUT/f'{mode}-gb-menu.png')
     press(gb,'a')
     assert gb.memory[ACTIVE] == 1 and gb.memory[CURRENT_MUSIC] == 5, 'Entering music focus must preview the selected GB set'
+    check_music_tab()
+    gb.screen.image.save(OUT/f'{mode}-gb-music-focus.png')
     press(gb,'b')
     assert gb.memory[0xDB0E] == 0 and gb.memory[ACTIVE] == 0
     press(gb,'select')
@@ -88,13 +103,15 @@ def ui_checks(path, cgb):
     for enabled in [1,0]:
         press(gb,'select')
         assert gb.memory[ENABLED] == enabled
-        assert bytes(gb.memory[0,0x99A9:0x99AB]) == bytes([0x7F,0x7F])
+        check_music_tab()
+        gb.screen.image.save(OUT/f'{mode}-{"gb" if enabled else "dx"}-music-focus.png')
     # Native and imported A/B/C, and OFF, using only menu buttons.
     for enabled in [0,1]:
         if gb.memory[ENABLED] != enabled: press(gb,'select')
         for selection in [1,2,3,4]:
             while gb.memory[0xDB0D] > selection: press(gb,'up')
             while gb.memory[0xDB0D] < selection: press(gb,'down')
+            check_music_tab()
             if selection == 4:
                 assert gb.memory[ACTIVE] == 0
                 assert sound_energy(gb,120) == 0, 'OFF must silence the BGM'
@@ -189,7 +206,7 @@ def ui_checks(path, cgb):
         assert gb.memory[ACTIVE] == 1 and gb.memory[CURRENT_MUSIC] == selection+4
         gb.screen.image.save(OUT/f'{mode}-gameplay-{selection}.png')
     gb.stop(save=False)
-    return f'{mode}: mode-row Select stays silent, blank indicators, preview toggles/OFF, gameplay, pause/resume, original SFX ownership and stereo routing passed'
+    return f'{mode}: extended MUSIC-A/B tab, palettes/highlights, mode-row Select stays silent, preview toggles/OFF, gameplay, pause/resume, original SFX ownership and stereo routing passed'
 
 
 def note_trace(gb, bank, ram_shift):
