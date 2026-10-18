@@ -10,7 +10,8 @@ import numpy as np
 from pyboy import PyBoy
 
 from build_rom import (ROOT, DX_NAME, GB_NAME, OUTPUT_NAME, HASHES, ENABLED,
-                       ACTIVE, PAUSED, LAST_ID, ENGINE_BANK, CURRENT_MUSIC)
+                       ACTIVE, PAUSED, LAST_ID, ENGINE_BANK, CURRENT_MUSIC,
+                       MUSIC_VARIANT, MUSIC_PHASE, START_MUSIC)
 from build_rom import control_code
 
 OUT = ROOT/'output'/'validation'
@@ -270,7 +271,7 @@ def mix_checks(path, cgb):
     return f'{"cgb" if cgb else "dmg"}: native SFX volumes preserved; movement/rotation use pulse 1 with GB and pulse 2 with DX'
 
 
-def sharing_checks(path,cgb):
+def sharing_checks(path,cgb,variant=0):
     """Piece SFX use the requested channels while the score keeps its timing."""
     gb = emulator(path,cgb)
     boot_menu(gb)
@@ -278,6 +279,13 @@ def sharing_checks(path,cgb):
     press(gb,'select')
     press(gb,'a',settle=120)
     press(gb,'a',settle=120)
+    if variant:
+        def force_height(_):
+            gb.memory[0xAF98] = 11 if variant == 1 else 14
+            gb.memory[0xAF99] = 255
+        gb.hook_register(1,0x4C40,force_height,None)
+        gb.tick(20,False,False)
+        assert gb.memory[MUSIC_VARIANT] == variant
     gameplay = snapshot(gb)
     def music_state():
         # The four locks intentionally change; sequence/timer/instrument state
@@ -361,7 +369,7 @@ def sharing_checks(path,cgb):
     assert rest_checked, 'Did not exercise wave-channel release during a music rest'
     assert routed and released and not errors, errors[:3]
     gb.stop(save=False)
-    return f'{"cgb" if cgb else "dmg"}: GB movement/rotation pulse-1 routing, score timing and music/waveform restoration (including rests) verified'
+    return f'{"cgb" if cgb else "dmg"}: GB {("Normal","Danger","Peril")[variant]} movement/rotation pulse-1 routing, score timing and music/waveform restoration (including rests) verified'
 
 
 def melody_checks(path, frames):
@@ -406,6 +414,110 @@ def melody_checks(path, frames):
     return report
 
 
+def variant_checks(path, cgb, frames):
+    """Exercise real height decisions and compare each variant's score/clock."""
+    gb = emulator(path,cgb)
+    boot_menu(gb)
+    mode_menu = snapshot(gb)
+    symbols = control_code().labels
+    height, requests, starts = [0], [], []
+    def force_height(_):
+        # Keep gameplay's real threshold selection and BGM call intact. Supply
+        # only its computed stack height, without building a dangerous board.
+        gb.memory[0xAF98] = height[0]
+        gb.memory[0xAF99] = 255
+    def requested(_): requests.append(gb.register_file.C)
+    def started(_): starts.append(gb.register_file.C)
+    gb.hook_register(1,0x4C40,force_height,None)
+    gb.hook_register(0,0x3F18,requested,None)
+    gb.hook_register(0,symbols['original_bgm'],started,None)
+    for imported in [False,True]:
+        for selection in [1,2,3,4]:
+            restore(gb,mode_menu)
+            press(gb,'a')
+            for _ in range(selection-1): press(gb,'down')
+            if imported: press(gb,'select')
+            height[0] = 0
+            press(gb,'a',settle=120)
+            press(gb,'a',settle=120)
+            stopped_native_id = gb.memory[0xDC9B]
+            for h,variant in [(11,1),(14,2),(11,1),(0,0)]:
+                height[0] = h
+                requests.clear()
+                starts.clear()
+                gb.tick(20,False,False)
+                song = (selection+0x43 if variant == 0 else
+                        0x5A+2*(selection-1)+variant-1) if selection<4 else 0
+                assert requests and set(requests) == {song}, (h,requests)
+                if imported and selection<4:
+                    assert gb.memory[ACTIVE] and gb.memory[LAST_ID] == song
+                    assert gb.memory[CURRENT_MUSIC] == selection+4
+                    assert gb.memory[MUSIC_VARIANT] == variant
+                    assert starts == [song], 'Repeated conditional requests restarted the score'
+                    assert gb.memory[0xDC9B] == stopped_native_id, 'A native DX song took over the GB variant'
+                else:
+                    assert gb.memory[ACTIVE] == 0
+                    if song: assert gb.memory[0xDC9B] == song
+                    else: assert sound_energy(gb,30) == 0, 'OFF started music at a height threshold'
+            if imported and selection<4:
+                height[0] = 14
+                gb.tick(10,False,False)
+                press(gb,'start',settle=30)
+                assert gb.memory[PAUSED] == 1 and gb.memory[MUSIC_VARIANT] == 2
+                paused = bytes(gb.memory[0xDF20:0xDF60]),gb.memory[MUSIC_PHASE]
+                assert sound_energy(gb,30) == 0
+                assert paused == (bytes(gb.memory[0xDF20:0xDF60]),gb.memory[MUSIC_PHASE])
+                press(gb,'start',settle=15)
+                assert gb.memory[PAUSED] == 0 and gb.memory[MUSIC_VARIANT] == 2
+                assert sound_energy(gb,15)>0
+    for bank,address in [(1,0x4C40),(0,0x3F18),(0,symbols['original_bgm'])]:
+        gb.hook_deregister(bank,address)
+
+    restore(gb,mode_menu)
+    press(gb,'a')
+    press(gb,'select')
+    music_menu = snapshot(gb)
+    def record(song,variant,length):
+        restore(gb,music_menu)
+        events,ticks = note_trace(gb,ENGINE_BANK+variant,-0x70)
+        def clear_trace(_):
+            for channel in events: channel.clear()
+            ticks[0] = 0
+        def request(_):
+            gb.register_file.B,gb.register_file.C = 0,song
+        gb.hook_register(ENGINE_BANK+variant,START_MUSIC,clear_trace,None)
+        gb.hook_register(0,0x3F18,request,None)
+        press(gb,'down')
+        gb.hook_deregister(0,0x3F18)
+        assert gb.memory[LAST_ID] == song and gb.memory[MUSIC_VARIANT] == variant
+        ticks_before = ticks[0]
+        gb.tick(length,False,False)
+        # Music tick count measures score speed, independently of note spacing.
+        assert abs(ticks[0]-ticks_before-length*(4+variant)/4)<=2
+        for address in [START_MUSIC,0x6C44,0x6D34]:
+            gb.hook_deregister(ENGINE_BANK+variant,address)
+        return events
+    for selection in [1,2,3]:
+        normal = record(selection+0x43,0,frames*2)
+        for variant,semitones in [(1,2),(2,4)]:
+            raised = record(0x5A+2*(selection-1)+variant-1,variant,frames)
+            for channel in range(4):
+                assert len(normal[channel])>=len(raised[channel])
+                for (tick,a),(normal_tick,b) in zip(raised[channel],normal[channel]):
+                    assert tick == normal_tick, 'Variant changed the score rhythm'
+                    assert a[:6] == b[:6] and a[8] == b[8], 'Variant changed notes, instruments or rests'
+                    if channel<3 and not a[8]:
+                        f = b[6] | b[7]<<8
+                        expected = round(2048-(2048-(f&0x7FF))/2**(semitones/12)) | (f&0xF800)
+                        assert a[6] | a[7]<<8 == expected, (
+                            'Incorrect transposition',selection,variant,channel,tick,a,b,expected)
+                    elif channel == 3:
+                        assert a[6:8] == b[6:8], 'Noise percussion changed timbre'
+            assert sum(map(len,raised))>frames//30, 'Variant was not audible/advancing'
+    gb.stop(save=False)
+    return f'{"cgb" if cgb else "dmg"}: all GB Danger/Peril tracks, pitch, synchronized 1.25x/1.5x tempo, native height transitions, return to normal, pause/resume, DX set and OFF verified'
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--rom',type=Path,default=ROOT/'output'/OUTPUT_NAME)
@@ -422,7 +534,12 @@ def main():
     report = [ui_checks(args.rom,True),ui_checks(args.rom,False)]
     report.extend([mix_checks(args.rom,True),mix_checks(args.rom,False)])
     report.extend([sharing_checks(args.rom,True),sharing_checks(args.rom,False)])
+    for variant in [1,2]:
+        report.extend([sharing_checks(args.rom,True,variant),
+                       sharing_checks(args.rom,False,variant)])
     report.extend(melody_checks(args.rom,args.frames))
+    report.extend([variant_checks(args.rom,True,args.frames),
+                   variant_checks(args.rom,False,args.frames)])
     import hashlib
     for name,digest in HASHES.items():
         assert hashlib.sha256((ROOT/'original_roms'/name).read_bytes()).hexdigest() == digest

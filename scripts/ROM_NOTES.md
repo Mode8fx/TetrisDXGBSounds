@@ -12,6 +12,7 @@ DX's sound driver occupies bank `$0C`. Its six-byte song table is at ROM `$03146
 (CPU `$546D`). Each entry contains a little-endian CPU pointer, ROM bank,
 priority, starting voice, and voice count. Preview IDs are `$37..39`; gameplay
 IDs are `$44..46`. These native table entries and all native song data are retained.
+Danger/Peril IDs are `$5A/$5B` for A, `$5C/$5D` for B, and `$5E/$5F` for C.
 
 | Fixed-bank entry | Native function | Patch behavior |
 | --- | --- | --- |
@@ -50,15 +51,17 @@ the existing menu VBlank routine, preserving the VRAM bank.
 ## Original player and ROM banking
 
 The build expands DX to 64 banks (1 MiB), keeping its MBC1/RAM/battery cartridge
-type. The original Tetris region `$6480..7FFF` is copied to bank `$21` at those
-same CPU addresses. Keeping addresses avoids relocating its sequence pointers,
+type. The original Tetris region `$6480..7FFF` is copied to banks `$21` (normal),
+`$22` (Danger), and `$23` (Peril) at those same CPU addresses. Keeping addresses
+avoids relocating its sequence pointers,
 pattern lists, instruments, and waveform references. Bank `$20` is not used
 because MBC1 remaps an upper-window bank whose low five bits are zero.
 
 Control code occupies previously zero-filled fixed ROM starting at `$3400`.
 `Code` emits the instructions, resolves labels, and records symbol addresses in
 the build report. Expanded-bank calls disable interrupts, save DX's bank shadow
-at `$FFFD`, set MBC1's high bank register, and select bank `$21`. The high register
+at `$FFFD`, set MBC1's high bank register, and select bank `$21 + variant`.
+The high register
 is cleared and the prior low bank restored before interrupts are re-enabled.
 This prevents DX's VBlank routines from seeing the wrong high bank bits.
 
@@ -72,6 +75,31 @@ Original entry points used by the bridge:
 
 Original song IDs 5, 6, and 7 are selected for A/B/C. Both preview and gameplay
 requests use the full original songs. Only those three original songs are invoked.
+
+## Danger and Peril
+
+DX's native height decision at bank `$01`, CPU `$4C40..4C6B`, selects normal
+music below 11 rows, Danger at 11..13, and Peril at 14..16. The bridge intercepts
+the six variant IDs above and retains DX's conditional restart behavior: a change
+of version starts the song once, while repeated requests leave it advancing.
+At 17 rows DX uses a separate shared alarm (`$4C`); that alarm remains native.
+Music OFF and the DX set follow the original logic.
+
+Danger raises tonal pitches by two semitones, and Peril by four. Each variant
+bank has a private pitch table at `$6000..60FF`, selected by changing the original
+tonal lookup's `ld hl, $6E02` at `$6CAA`. The table covers all even byte indexes,
+including B-TYPE's wave note `$94`, which originally reads `$6E96` past the
+documented pitch table. The builder transposes the 11 frequency bits using
+`2048 - (2048 - frequency) / 2**(semitones/12)` and rounds to an integer,
+preserving the other bits. The original noise table and percussion timbres
+remain intact, as do all note streams, lengths, instruments, and waveforms.
+
+A fractional clock advances the complete GB player once per frame, plus one
+extra step every four frames for Danger or every two for Peril. This yields
+exact 1.25x and 1.5x score speeds without rounding individual note lengths or
+drifting between parts. The phase resets on a new track and freezes on pause.
+DX's native player still updates once per frame, preserving SFX timing and
+volume. Locks and restoration apply before either GB music step.
 
 ## RAM relocation and sound effects
 
@@ -92,6 +120,8 @@ pointer without this bound would overwrite the patch's control state.
 | `$DF95` | Unconditional versus conditional BGM request |
 | `$DF96` | Restore current notes on resume |
 | `$DF97` | Native NR51 routing snapshot for the current audio update |
+| `$DF98` | GB variant: 0 normal, 1 Danger, 2 Peril |
+| `$DF99` | Fractional music-clock phase, 0..3 |
 
 While imported BGM plays, native BGM voices are stopped, but DX continues advancing
 its SFX. Native hardware-channel flags at `$DEA0`, `$DEB8`, `$DED0`, and `$DEE8`
@@ -164,7 +194,13 @@ mixing step finishes. Note/rest event comparisons
 include frame numbers, sequence pointers, durations, instruments, frequencies,
 and rest flags over two minutes for each imported song. Hook callback failures
 are collected and checked outside callbacks because PyBoy can swallow callback
-exceptions. Results and screenshots are regenerated in `output/validation`.
+exceptions. Variant checks supply stack height at the real DX decision routine,
+exercise both directions of each threshold for A/B/C, and verify OFF and the DX
+set. They compare each variant's complete score with normal playback in music
+ticks, checking exact note order/rhythm, transposition (including B's extended
+wave note), unchanged percussion timbres, and fractional tick counts. Pause and
+SFX ownership/restoration checks also run with the faster variants. Results and
+screenshots are regenerated in `output/validation`.
 
 `gb_disasm.py ROM START END` disassembles an offset range using hex (`0x...`) or
 decimal addresses. `inspect_dx.py --rom ROM --steps '600,start,120,...'` captures

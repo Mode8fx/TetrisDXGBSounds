@@ -11,6 +11,12 @@ SONGS = {
     'A-TYPE Gameplay': 0x44,
     'B-TYPE Gameplay': 0x45,
     'C-TYPE Gameplay': 0x46,
+    'A-TYPE Danger': 0x5A,
+    'A-TYPE Peril': 0x5B,
+    'B-TYPE Danger': 0x5C,
+    'B-TYPE Peril': 0x5D,
+    'C-TYPE Danger': 0x5E,
+    'C-TYPE Peril': 0x5F,
 }
 
 

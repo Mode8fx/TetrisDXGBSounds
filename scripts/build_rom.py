@@ -26,6 +26,9 @@ HASHES = {
 ENABLED, ACTIVE, PAUSED, SAVED_BANK, LAST_ID = range(0xDF90, 0xDF95)
 FORCE_RESTART, RESTORE_ALL = 0xDF95, 0xDF96
 NATIVE_PAN = 0xDF97
+MUSIC_VARIANT = 0xDF98  # 0 normal, 1 Danger, 2 Peril
+MUSIC_PHASE = 0xDF99  # fractional clock: +variant/4 music ticks per frame
+VARIANTS = [('Normal', 0), ('Danger', 2), ('Peril', 4)]
 NEW_MUSIC, CURRENT_MUSIC = 0xDF78, 0xDF79
 START_MUSIC, PLAY_MUSIC, MUTE = 0x6A21, 0x6C44, 0x69C7
 ENGINE_BANK = 0x21  # MBC1 cannot map bank $20 into the upper ROM window.
@@ -73,7 +76,7 @@ def control_code():
     c = Code(0x3400)
     c.mark('init')
     c.emit('af')
-    for var in [ENABLED, ACTIVE, PAUSED, LAST_ID, FORCE_RESTART, RESTORE_ALL, NATIVE_PAN]: c.store_a(var)
+    for var in [ENABLED, ACTIVE, PAUSED, LAST_ID, FORCE_RESTART, RESTORE_ALL, NATIVE_PAN, MUSIC_VARIANT, MUSIC_PHASE]: c.store_a(var)
     c.jp(0x3F00)
 
     # All expanded-bank execution is interrupt protected. MBC1's high bank
@@ -81,7 +84,9 @@ def control_code():
     c.mark('bank_in')
     c.emit('f3 f0 fd')  # di / ldh a, [current bank]
     c.store_a(SAVED_BANK)
-    c.emit('3e 01 ea 00 40 ea 00 20 3e 21 e0 fd c9')
+    c.emit('3e 01 ea 00 40')
+    c.ld_a(MUSIC_VARIANT)
+    c.emit('c6 01 ea 00 20 c6 20 e0 fd c9')  # banks $21/$22/$23
     c.mark('bank_out')
     c.emit('af ea 00 40')
     c.ld_a(SAVED_BANK)
@@ -95,7 +100,7 @@ def control_code():
     c.call(MUTE)
     c.call('bank_out')
     c.emit('af')
-    for var in [ACTIVE, PAUSED, CURRENT_MUSIC]: c.store_a(var)
+    for var in [ACTIVE, PAUSED, CURRENT_MUSIC, MUSIC_VARIANT]: c.store_a(var)
     c.emit('e1 d1 c1 c9')
 
     # BGM APIs $3F12 and $3F18 have different restart semantics.
@@ -126,10 +131,26 @@ def control_code():
     c.emit('fe 44')
     c.op(0xDA, 'native_bgm')
     c.emit('fe 47')
+    c.op(0xDA, 'normal_gameplay')
+    c.emit('fe 5a')
+    c.op(0xDA, 'native_bgm')
+    c.emit('fe 60')
     c.op(0xD2, 'native_bgm')
+    # $5A/$5B A, $5C/$5D B, $5E/$5F C: Danger then Peril.
+    c.emit('d6 5a e6 01 3c')
+    c.store_a(MUSIC_VARIANT)
+    c.emit('79 d6 5a cb 3f c6 05')
+    c.jp('original_bgm')
+    c.mark('normal_gameplay')
+    c.emit('af')
+    c.store_a(MUSIC_VARIANT)
+    c.emit('79')
     c.emit('d6 3f')  # $44..46 -> original song IDs 5..7
     c.jp('original_bgm')
     c.mark('preview')
+    c.emit('af')
+    c.store_a(MUSIC_VARIANT)
+    c.emit('79')
     c.emit('d6 32')  # $37..39 -> original song IDs 5..7
     c.mark('original_bgm')
     c.emit('c5 f5')
@@ -147,6 +168,7 @@ def control_code():
     c.emit('af')
     c.store_a(PAUSED)
     c.store_a(RESTORE_ALL)
+    c.store_a(MUSIC_PHASE)
     c.call('bank_out')
     c.emit('c1 af c9')
     c.mark('native_bgm')
@@ -214,6 +236,20 @@ def control_code():
     c.emit('af')
     c.store_a(RESTORE_ALL)
     c.call(PLAY_MUSIC)
+    # The whole score advances at 1x / 1.25x / 1.5x. Use a fractional clock,
+    # keeping note lengths intact so different rhythms cannot drift apart.
+    # Native effects are still updated exactly once per video frame above.
+    c.ld_a(MUSIC_VARIANT)
+    c.emit('47')
+    c.ld_a(MUSIC_PHASE)
+    c.emit('80 fe 04')
+    c.op(0xDA, 'save_music_phase')
+    c.emit('d6 04')
+    c.store_a(MUSIC_PHASE)
+    c.call(PLAY_MUSIC)
+    c.jp('frame_music_done')
+    c.mark('save_music_phase')
+    c.store_a(MUSIC_PHASE)
     c.mark('frame_music_done')
     # Music is stereo on free channels. Effect-owned channels retain exactly
     # the routing/mute bits produced by DX, even across later music frames.
@@ -382,8 +418,26 @@ def build(dx: bytes, original: bytes):
     engine[0x6B7D-0x6480:0x6B89-0x6480] = bytes([0xC3])+code.labels['wave_command'].to_bytes(2,'little')+bytes(9)
     assert original[0x6BEB:0x6BEF] == bytes.fromhex('3e 40 e0 1c')
     engine[0x6BEB-0x6480:0x6BEF-0x6480] = bytes([0xCD])+code.labels['wave_decay'].to_bytes(2,'little')+bytes(1)
-    destination = ENGINE_BANK * 0x4000 + 0x2480
-    patch(destination, bytes([0xFF])*len(engine), engine, 'Original Tetris engine and song data, WRAM relocated')
+    for variant, (name, semitones) in enumerate(VARIANTS):
+        music = bytearray(engine)
+        if variant:
+            # Preserve note streams, durations, rests, instruments and noise
+            # timbres. GB B's wave part also indexes past NotePitches into the
+            # following noise table ($94 -> $6E96). Use a private full-range
+            # pitch lookup rather than changing bytes shared with percussion.
+            pitches = bytearray(original[0x6E02:0x6F02])
+            for address in range(0x6E04, 0x6F02, 2):
+                frequency = int.from_bytes(original[address:address+2], 'little')
+                raised = round(2048-(2048-(frequency&0x7FF))/2**(semitones/12))
+                pitches[address-0x6E02:address-0x6E02+2] = (raised|(frequency&0xF800)).to_bytes(2,'little')
+            assert original[0x6CAA:0x6CAD] == bytes.fromhex('21 02 6e')
+            music[0x6CAA-0x6480:0x6CAD-0x6480] = bytes.fromhex('21 00 60')
+            pitch_destination = (ENGINE_BANK+variant)*0x4000+0x2000
+            patch(pitch_destination, bytes([0xFF])*len(pitches), pitches,
+                  f'{name} private transposed pitch table (including GB B extended notes)')
+        destination = (ENGINE_BANK+variant) * 0x4000 + 0x2480
+        patch(destination, bytes([0xFF])*len(music), music,
+              f'{name} GB music engine/data, WRAM relocated; +{semitones} semitones, tempo {4+variant}/4')
     if code.origin + len(payload) > 0x3F00: raise ValueError('Control code exceeds free ROM0 region')
     patch(code.origin, bytes(len(payload)), payload, 'Music-bank control code')
     def hook(offset, expected, label, opcode=0xCD):
