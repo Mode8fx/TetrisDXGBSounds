@@ -15,7 +15,7 @@ from gb_disasm import instruction
 ROOT = Path(__file__).resolve().parents[1]
 DX_NAME = 'Tetris DX (World) (SGB Enhanced) (GB Compatible).gbc'
 GB_NAME = 'Tetris (World) (Rev 1).gb'
-OUTPUT_NAME = 'Tetris DX - Additional Music.gbc'
+OUTPUT_NAME = 'Tetris DX - GB Sounds.gbc'
 HASHES = {
     DX_NAME: 'd349dc93423c6abcd775d3b6a8797df715a44a42ec837afb21bf17ae43b40a9e',
     GB_NAME: '0d6535aef23969c7e5af2b077acaddb4a445b3d0df7bf34c8acef07b51b015c3',
