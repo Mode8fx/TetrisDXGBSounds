@@ -73,7 +73,7 @@ Original entry points used by the bridge:
 - `$6A21`: start the requested song
 - `$6C44`: advance music by one frame
 
-Original song IDs 5, 6, and 7 are selected for A/B/C. Both preview and gameplay
+Original song IDs 5, 6, and 7 are selected for A/B/C. Normal preview and gameplay
 requests use the full original songs. Only those three original songs are invoked.
 
 ## Danger and Peril
@@ -84,6 +84,15 @@ the six variant IDs above and retains DX's conditional restart behavior: a chang
 of version starts the song once, while repeated requests leave it advancing.
 At 17 rows DX uses a separate shared alarm (`$4C`); that alarm remains native.
 Music OFF and the DX set follow the original logic.
+
+B-TYPE's Danger/Peril versions omit the opening 192 music ticks (about 3.2
+seconds at normal speed). The first two sections of each tonal part last 96
+ticks each. In banks `$22/$23`, the B header's list pointers at `$6F79/$6F7B/$6F7D`
+advance by four bytes to start at section 3: pulse 1 at `$738E`, pulse 2 at
+`$7367`, and wave at `$73B5`. Each starts with its own instrument command. The
+loop destinations at `$72D2/$72C4/$7300` also advance by four bytes so the intro
+does not recur. The 48-tick percussion loop already aligns with the 192-tick
+boundary and needs no edit. The normal B song and its preview retain the intro.
 
 Danger raises tonal pitches by two semitones, and Peril by four. Each variant
 bank has a private pitch table at `$6000..60FF`, selected by changing the original
@@ -198,7 +207,11 @@ exceptions. Variant checks supply stack height at the real DX decision routine,
 exercise both directions of each threshold for A/B/C, and verify OFF and the DX
 set. They compare each variant's complete score with normal playback in music
 ticks, checking exact note order/rhythm, transposition (including B's extended
-wave note), unchanged percussion timbres, and fractional tick counts. Pause and
+wave note), unchanged percussion timbres, and fractional tick counts. For B,
+the reference removes both intro sections and their durations on every loop of
+normal playback; percussion retains its original phase. This checks the cut at
+the start and on repeats while the normal song still matches the original ROM.
+Pause and
 SFX ownership/restoration checks also run with the faster variants. Results and
 screenshots are regenerated in `output/validation`.
 

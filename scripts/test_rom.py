@@ -499,11 +499,31 @@ def variant_checks(path, cgb, frames):
         return events
     for selection in [1,2,3]:
         normal = record(selection+0x43,0,frames*2)
+        reference = normal
+        if selection == 2:
+            # Derive the expected shortened score from normal playback, rather
+            # than from the patched variant's header/loop pointers. Remove the
+            # two opening sections whenever they recur, including their time.
+            reference = [[],[],[],normal[3]]
+            intro_ranges = [((0x7308,0x730B),(0x733C,0x733F)),
+                            ((0x730B,0x731F),(0x733F,0x7353)),
+                            ((0x731F,0x7333),(0x7353,0x7367))]
+            for channel,ranges in enumerate(intro_ranges):
+                skipped = 0
+                for tick,data in normal[channel]:
+                    pointer = data[1] | data[2]<<8
+                    if any(lo<=pointer<hi for lo,hi in ranges):
+                        skipped += data[0]
+                    else:
+                        reference[channel].append((tick-skipped,data))
+                assert reference[channel][0][0] == 1
+                assert next(tick for tick,data in normal[channel]
+                            if data == reference[channel][0][1]) == 193, 'B intro is not 192 ticks'
         for variant,semitones in [(1,2),(2,4)]:
             raised = record(0x5A+2*(selection-1)+variant-1,variant,frames)
             for channel in range(4):
-                assert len(normal[channel])>=len(raised[channel])
-                for (tick,a),(normal_tick,b) in zip(raised[channel],normal[channel]):
+                assert len(reference[channel])>=len(raised[channel])
+                for (tick,a),(normal_tick,b) in zip(raised[channel],reference[channel]):
                     assert tick == normal_tick, 'Variant changed the score rhythm'
                     assert a[:6] == b[:6] and a[8] == b[8], 'Variant changed notes, instruments or rests'
                     if channel<3 and not a[8]:
@@ -515,7 +535,7 @@ def variant_checks(path, cgb, frames):
                         assert a[6:8] == b[6:8], 'Noise percussion changed timbre'
             assert sum(map(len,raised))>frames//30, 'Variant was not audible/advancing'
     gb.stop(save=False)
-    return f'{"cgb" if cgb else "dmg"}: all GB Danger/Peril tracks, pitch, synchronized 1.25x/1.5x tempo, native height transitions, return to normal, pause/resume, DX set and OFF verified'
+    return f'{"cgb" if cgb else "dmg"}: all GB Danger/Peril tracks, pitch, synchronized 1.25x/1.5x tempo, B intro skipped at start/loop with percussion aligned, native height transitions, return to normal, pause/resume, DX set and OFF verified'
 
 
 def main():

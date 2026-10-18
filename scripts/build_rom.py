@@ -421,6 +421,16 @@ def build(dx: bytes, original: bytes):
     for variant, (name, semitones) in enumerate(VARIANTS):
         music = bytearray(engine)
         if variant:
+            # B-TYPE's first two sections total 192 music ticks (3.2 seconds).
+            # Start all tonal parts at section 3, and loop back there too. The
+            # 48-tick percussion loop already aligns with that boundary.
+            for address, before, after in [
+                (0x6F79,0x72C6,0x72CA), (0x6F7B,0x72B8,0x72BC),
+                (0x6F7D,0x72D4,0x72D8), (0x72D2,0x72C6,0x72CA),
+                (0x72C4,0x72B8,0x72BC), (0x7300,0x72D4,0x72D8),
+            ]:
+                assert int.from_bytes(original[address:address+2],'little') == before
+                music[address-0x6480:address-0x6480+2] = after.to_bytes(2,'little')
             # Preserve note streams, durations, rests, instruments and noise
             # timbres. GB B's wave part also indexes past NotePitches into the
             # following noise table ($94 -> $6E96). Use a private full-range
@@ -437,7 +447,8 @@ def build(dx: bytes, original: bytes):
                   f'{name} private transposed pitch table (including GB B extended notes)')
         destination = (ENGINE_BANK+variant) * 0x4000 + 0x2480
         patch(destination, bytes([0xFF])*len(music), music,
-              f'{name} GB music engine/data, WRAM relocated; +{semitones} semitones, tempo {4+variant}/4')
+              f'{name} GB music engine/data, WRAM relocated; +{semitones} semitones, tempo {4+variant}/4'
+              + ('; B-TYPE intro skipped at start and loop' if variant else ''))
     if code.origin + len(payload) > 0x3F00: raise ValueError('Control code exceeds free ROM0 region')
     patch(code.origin, bytes(len(payload)), payload, 'Music-bank control code')
     def hook(offset, expected, label, opcode=0xCD):
