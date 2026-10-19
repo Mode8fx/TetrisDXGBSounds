@@ -65,10 +65,14 @@ def ui_checks(path, cgb):
     initial = snapshot(gb)
     mode = 'cgb' if cgb else 'dmg'
     def check_music_tab():
-        suffix = 0x80+gb.memory[ENABLED]
+        suffix = 0xA1+gb.memory[ENABLED]
         assert bytes(gb.memory[0,0x9982:0x9984]) == bytes.fromhex('29 2a')
         assert bytes(gb.memory[0,0x99C2:0x99C4]) == bytes.fromhex('49 4a')
-        assert bytes(gb.memory[0,0x99A2:0x99AB]) == bytes.fromhex('39 8c 94 92 88 82 9f')+bytes([suffix,0x7F]), 'Extended tab must read MUSIC-A (DX) or MUSIC-B (GB)'
+        assert bytes(gb.memory[0,0x99A2:0x99AB]) == bytes.fromhex('39 8c 94 92 88 82 9f')+bytes([suffix,0x7F]), 'Extended tab must read MUSIC-1 (DX) or MUSIC-2 (GB)'
+        for source, shadow in [(0x8A10,0x8C80),(0x8A20,0x8C90)]:
+            for row in range(8):
+                bits = gb.memory[0,source+row*2+1]
+                assert bytes(gb.memory[0,shadow+row*2:shadow+row*2+2]) == bytes([bits^255,bits]), 'Inactive label must use digit glyphs'
         if cgb:
             assert bytes(gb.memory[1,0x99A3:0x99AA]) == bytes([7])*7
             assert gb.memory[1,0x99A2] == 1, 'Border palette changed'

@@ -39,7 +39,7 @@ The game/music menu is state `$04`. Its code is in bank `$05`:
 | `$014C48` | Mode-row input call: Select toggles PINCH, then native input |
 | `$014C5B` | Music-row input call: Select toggles PINCH, Left/Right switches sets |
 | `$014C01` | Initialize the extended music tab before enabling the LCD |
-| `$014C61` | VBlank display routine, updates the A/B suffix and PINCH strip |
+| `$014C61` | VBlank display routine, updates the 1/2 suffix and PINCH strip |
 | `$014D6C` | Draw the seven-character inactive label on CGB |
 | `$014DB5` | Draw the seven-character inactive label on DMG/SGB |
 
@@ -49,12 +49,12 @@ preview, with `$DB0E` also checked defensively. The mode-row wrapper leaves the
 set alone. Select (bit 2) toggles PINCH in either focus without restarting music.
 Holding a button changes its setting once. OFF remains silent when the set
 changes. Original input handling continues after the wrapper. The
-display wrapper writes font tile `$80` (A, DX) or `$81` (B, GB) at `$99A9`
+display wrapper writes font tile `$A1` (1, DX) or `$A2` (2, GB) at `$99A9`
 during the existing menu VBlank routine, preserving the VRAM bank.
 
 The tab's left edge moves one tile (8 pixels) left. With the LCD off, the
 initialization wrapper reuses border tiles `$29/$39/$49` at column 2 and fills
-the former edge at column 3. The seven font cells at `$99A3..99A9` read MUSIC-A/B;
+the former edge at column 3. The seven font cells at `$99A3..99A9` read MUSIC-1/2;
 the hyphen is `$9F`. CGB attributes use the original text palette 7, with border
 palette 1 retained. Attribute writes are skipped on DMG/SGB by checking that
 VRAM bank 0 can be selected.
@@ -62,7 +62,7 @@ VRAM bank 0 can be selected.
 The original inactive MUSIC sprites use a different font color from the focused
 background label. Seven-character sprite lists preserve that treatment for the
 whole new label, with separate CGB and DMG attributes. At menu initialization,
-font glyphs for -, A and B are converted to that sprite color in three otherwise
+font glyphs for -, 1 and 2 are converted to that sprite color in three otherwise
 unused menu tiles (`$9B/$C8/$C9`). The CGB wrapper replaces the label drawing
 call; the DMG wrapper replaces only the inactive label and retains the native
 song cursor when music has focus. Original ROM graphics and other menus' sprite
@@ -272,7 +272,7 @@ handlers, six previews, OFF, three Marathon music selections, pause/resume, nati
 SFX ownership, ROM checksums, and original input hashes. Regression checks verify
 that mode-row Left/Right cannot switch sets, music-focus Left/Right switches
 once per press, Select changes only PINCH, its default is ON, and its strip
-tracks the setting in either focus. They check that the extended border and MUSIC-A/B
+tracks the setting in either focus. They check that the extended border and MUSIC-1/2
 label are correct with both focus states and all song selections, all seven
 inactive letters have matching sprites, and only the pulse-selection call
 changes in the DX sound-driver bank.

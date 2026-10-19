@@ -396,7 +396,7 @@ def control_code():
     c.jp(0x4C4B)
 
     # Menu initialization still has the LCD off. Extend the left edge one tile
-    # and use seven font cells for MUSIC-A/B. Reuse the original border/font.
+    # and use seven font cells for MUSIC-1/2. Reuse the original border/font.
     c.mark('menu_layout')
     c.store_a(0xC0A8)  # displaced initialization instruction
     c.emit('f0 4f f5 af e0 4f')
@@ -407,13 +407,13 @@ def control_code():
         c.emit(f'3e {tile:02x}')
         c.store_a(address)
     c.ld_a(ENABLED)
-    c.emit('c6 80')
+    c.emit('c6 a1')
     c.store_a(0x99A9)
-    # Extend the native inactive-label highlight with -, A and B glyphs.
+    # Extend the native inactive-label highlight with -, 1 and 2 glyphs.
     # These three blank menu tiles have no tilemap/sprite users here. Convert
     # font color 3 to the native MUSIC overlay's color 2, background color 1.
     c.emit('c5 d5 e5')
-    for source,destination in [(0x89F0,0x89B0),(0x8800,0x8C80),(0x8810,0x8C90)]:
+    for source,destination in [(0x89F0,0x89B0),(0x8A10,0x8C80),(0x8A20,0x8C90)]:
         c.op(0x21,source)
         c.op(0x11,destination)
         c.call('make_label_shadow')
@@ -512,12 +512,12 @@ def control_code():
                 c.emit(f'f8 {x:02x} {tile:02x} {attribute:02x}')
             c.emit('80')
 
-    # Menu display routine runs in VBlank. Refresh just the A/B suffix and
+    # Menu display routine runs in VBlank. Refresh just the 1/2 suffix and
     # preserve the VRAM bank and the routine's original entry instruction.
     c.mark('indicator')
     c.emit('f0 4f f5 af e0 4f')
     c.ld_a(ENABLED)
-    c.emit('c6 80')  # font A = $80 (DX), B = $81 (GB)
+    c.emit('c6 a1')  # font 1 = $A1 (DX), 2 = $A2 (GB)
     c.store_a(0x99A9)
     c.call('draw_pinch_map')
     c.emit('f1 e0 4f')
