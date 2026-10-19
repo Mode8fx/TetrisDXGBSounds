@@ -33,6 +33,7 @@ PINCH_ENABLED, GLYPH_BITS, GLYPH_ROWS = 0xDF9A, 0xDF9B, 0xDF9C
 # signed-mode IDs reside at $9000+, outside sprite tile memory.
 PINCH_TILES = bytes([0x24,0x26,0x27,0x28,0x2D,0x2E,0x2F,0x38,0x3A,0x3B,
                      0x3C,0x3D,0x3E,0x3F,0x44,0x45,0x46,0x47,0x48,0x4B])
+PINCH_BACKDROP = 0xDF9D  # ten original bottom-row tile IDs, restored on mode rows
 VARIANTS = [('Normal', 0), ('Danger', 2), ('Peril', 4)]
 NEW_MUSIC, CURRENT_MUSIC = 0xDF78, 0xDF79
 START_MUSIC, PLAY_MUSIC, MUTE = 0x6A21, 0x6C44, 0x69C7
@@ -351,7 +352,6 @@ def control_code():
     c.jp(0x4178)  # original pulse-2 selector, registers $FF16..19
 
     c.mark('menu_modes')
-    c.call('toggle_pinch')
     c.jp(0x4C6F)
     c.mark('menu_music')
     c.call('toggle_pinch')
@@ -375,7 +375,9 @@ def control_code():
     c.jp('bgm_start')
 
     c.mark('toggle_pinch')
-    c.emit('f0 83 e6 04 c8')  # Select changes PINCH in either menu focus.
+    c.emit('f0 83 e6 04 c8')  # Select changes PINCH only in music focus.
+    c.ld_a(0xDB0E)
+    c.emit('a7 c8')
     c.ld_a(PINCH_ENABLED)
     c.emit('ee 01')
     c.store_a(PINCH_ENABLED)
@@ -400,6 +402,14 @@ def control_code():
     c.mark('menu_layout')
     c.store_a(0xC0A8)  # displaced initialization instruction
     c.emit('f0 4f f5 af e0 4f')
+    c.emit('c5 d5 e5')
+    c.op(0x21,0x9A20)
+    c.op(0x11,PINCH_BACKDROP)
+    c.emit('06 0a')
+    c.mark('save_pinch_backdrop')
+    c.emit('2a 12 13 05')
+    c.op(0xC2,'save_pinch_backdrop')
+    c.emit('e1 d1 c1')
     for address,tile in [(0x9982,0x29),(0x9983,0x2A),(0x99A2,0x39),
                          (0x99A3,0x8C),(0x99A4,0x94),(0x99A5,0x92),
                          (0x99A6,0x88),(0x99A7,0x82),(0x99A8,0x9F),
@@ -470,6 +480,10 @@ def control_code():
 
     c.mark('draw_pinch_map')
     c.emit('c5 d5 e5')
+    c.ld_a(0xDB0E)
+    c.emit('a7')
+    c.op(0x21,PINCH_BACKDROP)
+    c.op(0xCA,'pinch_map_ready')
     c.ld_a(PINCH_ENABLED)
     c.emit('a7')
     c.op(0x21,'pinch_on_map')

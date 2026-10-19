@@ -11,7 +11,8 @@ from pyboy import PyBoy
 
 from build_rom import (ROOT, DX_NAME, GB_NAME, OUTPUT_NAME, HASHES, ENABLED,
                        ACTIVE, PAUSED, LAST_ID, ENGINE_BANK, CURRENT_MUSIC,
-                       MUSIC_VARIANT, MUSIC_PHASE, START_MUSIC, PINCH_ENABLED, PINCH_TILES)
+                       MUSIC_VARIANT, MUSIC_PHASE, START_MUSIC, PINCH_ENABLED,
+                       PINCH_TILES, PINCH_BACKDROP)
 from build_rom import control_code
 
 OUT = ROOT/'output'/'validation'
@@ -60,6 +61,12 @@ def sound_energy(gb, frames=60):
 
 
 def ui_checks(path, cgb):
+    from PIL import ImageChops
+    native = emulator(ROOT/'original_roms'/DX_NAME,cgb)
+    boot_menu(native)
+    backdrop_map = bytes(native.memory[0,0x9A20:0x9A2A])
+    backdrop_image = native.screen.image.crop((0,136,80,144)).convert('RGB')
+    native.stop(save=False)
     gb = emulator(path, cgb)
     boot_menu(gb)
     initial = snapshot(gb)
@@ -76,8 +83,21 @@ def ui_checks(path, cgb):
         if cgb:
             assert bytes(gb.memory[1,0x99A3:0x99AA]) == bytes([7])*7
             assert gb.memory[1,0x99A2] == 1, 'Border palette changed'
-        assert bytes(gb.memory[0,0x9A20:0x9A2A]) == (
-            PINCH_TILES[:10] if gb.memory[PINCH_ENABLED] else PINCH_TILES[10:]), 'PINCH strip does not reflect setting'
+        music_focus = bool(gb.memory[0xDB0E])
+        expected_map = (PINCH_TILES[:10] if gb.memory[PINCH_ENABLED] else PINCH_TILES[10:]) if music_focus else backdrop_map
+        assert bytes(gb.memory[PINCH_BACKDROP:PINCH_BACKDROP+10]) == backdrop_map
+        assert bytes(gb.memory[0,0x9A20:0x9A2A]) == expected_map, 'PINCH strip does not reflect setting/focus'
+        if cgb:
+            assert bytes(gb.memory[1,0x9A20:0x9A2A]) == bytes([2])*10
+        # Check a visible pixel of P, using its actual native font mask.
+        x,y = next((x,y) for y in range(8) for x in range(8)
+                   if gb.memory[0,0x88F1+y*2]&(128>>x))
+        rgb = gb.screen.image.getpixel((8+x,136+y))[:3]
+        if music_focus:
+            assert rgb == (0,0,0), 'PINCH must be black in music focus'
+        else:
+            current = gb.screen.image.crop((0,136,80,144)).convert('RGB')
+            assert ImageChops.difference(current,backdrop_image).getbbox() is None, 'PINCH must be entirely hidden on mode rows'
         if not gb.memory[0xDB0E]:
             sprites = [tuple(gb.memory[a:a+4]) for a in range(0xFE00,0xFEA0,4)]
             for x,tile in zip(range(0x20,0x51,8),[0xB0,0xB1,0xB2,0xB3,0xB4,0x9B,0xC8+gb.memory[ENABLED]]):
@@ -90,15 +110,29 @@ def ui_checks(path, cgb):
         press(gb,button,hold=20)
         assert gb.memory[ENABLED] == 0 and gb.memory[ACTIVE] == 0, 'Mode rows must not switch music sets'
     press(gb,'select',hold=120)
-    assert gb.memory[PINCH_ENABLED] == 0, 'Held Select must toggle PINCH only once'
+    assert gb.memory[PINCH_ENABLED] == 1, 'Mode rows must not toggle PINCH'
     assert gb.memory[ENABLED] == 0 and gb.memory[ACTIVE] == 0
-    assert gb.memory[0xDC9B] == menu_song, 'PINCH change must retain menu music'
+    assert gb.memory[0xDC9B] == menu_song
     check_music_tab()
-    gb.screen.image.save(OUT/f'{mode}-pinch-off.png')
-    press(gb,'select')
-    assert gb.memory[PINCH_ENABLED] == 1
     press(gb,'a')
     assert gb.memory[ACTIVE] == 0 and gb.memory[0xDB0E] == 1
+    check_music_tab()
+    preview_song = gb.memory[0xDC9B]
+    press(gb,'select',hold=120)
+    assert gb.memory[PINCH_ENABLED] == 0, 'Held Select must toggle PINCH only once'
+    assert gb.memory[0xDC9B] == preview_song, 'PINCH change must retain preview music'
+    check_music_tab()
+    gb.screen.image.save(OUT/f'{mode}-pinch-off.png')
+    press(gb,'b')
+    check_music_tab()
+    gb.screen.image.save(OUT/f'{mode}-pinch-off-inactive.png')
+    press(gb,'select',hold=120)
+    assert gb.memory[PINCH_ENABLED] == 0, 'Mode rows must retain PINCH OFF'
+    check_music_tab()
+    press(gb,'a')
+    check_music_tab()
+    press(gb,'select')
+    assert gb.memory[PINCH_ENABLED] == 1
     press(gb,'right',hold=120)
     assert gb.memory[ENABLED] == 1, 'Held Right must switch only once'
     assert gb.memory[ACTIVE] == 1 and gb.memory[CURRENT_MUSIC] == 5
@@ -108,6 +142,7 @@ def ui_checks(path, cgb):
     gb.screen.image.save(OUT/f'{mode}-gb-music-focus.png')
     press(gb,'b')
     assert gb.memory[0xDB0E] == 0 and gb.memory[ACTIVE] == 0
+    check_music_tab()
     for button in ['left','right']:
         press(gb,button)
         assert gb.memory[ENABLED] == 1 and gb.memory[ACTIVE] == 0
@@ -230,7 +265,42 @@ def ui_checks(path, cgb):
         assert gb.memory[ACTIVE] == 1 and gb.memory[CURRENT_MUSIC] == selection+4
         gb.screen.image.save(OUT/f'{mode}-gameplay-{selection}.png')
     gb.stop(save=False)
-    return f'{mode}: music-focus Left/Right switching, mode-row lockout, Select PINCH toggle/default/strip, palettes/highlights, preview/OFF, gameplay, pause/resume and SFX passed'
+    return f'{mode}: music-focus Left/Right and Select PINCH controls, mode-row lockout, PINCH hidden on mode rows/black in music focus, default/palettes/highlights, preview/OFF, gameplay, pause/resume and SFX passed'
+
+
+def menu_palette_checks(path):
+    """Compare song-window backdrop pixels and palette data against native DX."""
+    from PIL import ImageChops
+    native, patched = emulator(ROOT/'original_roms'/DX_NAME), emulator(path)
+    for gb in [native,patched]: boot_menu(gb)
+    def check_palettes():
+        assert bytes(native.memory[0xC200:0xC280]) == bytes(patched.memory[0xC200:0xC280]), 'Native BG/OBJ palette sources changed'
+    for focus in [0,1,0,1,0]:
+        for gb in [native,patched]:
+            if bool(gb.memory[0xDB0E]) != bool(focus): press(gb,'a' if focus else 'b')
+        for selection in [1,2,3,4]:
+            for gb in [native,patched]:
+                address,target = (0xDB0D,selection) if focus else (0xDB07,selection-1)
+                while gb.memory[address] > target: press(gb,'up')
+                while gb.memory[address] < target: press(gb,'down')
+            check_palettes()
+            # Sample the backdrop and borders around all four titles,
+            # avoiding their independently animated foreground highlights.
+            for box in [(144,100,152,140),(104,100,144,104),(104,136,144,140)]:
+                a,b = (gb.screen.image.crop(box).convert('RGB') for gb in [native,patched])
+                assert ImageChops.difference(a,b).getbbox() is None, ('Song-title backdrop differs from native DX',focus,selection,box)
+            if focus:
+                press(patched,'select')
+                check_palettes()
+        if not focus:
+            for gb in [native,patched]:
+                while gb.memory[0xDB07]: press(gb,'up')
+    for stage in ['music','level selection','gameplay']:
+        for gb in [native,patched]: press(gb,'a',settle=120)
+        if stage != 'music':
+            assert bytes(native.memory[0xC200:0xC280]) == bytes(patched.memory[0xC200:0xC280]), 'PINCH color leaked outside the music/mode menu'
+    for gb in [native,patched]: gb.stop(save=False)
+    return 'cgb: native BG/OBJ palettes and song-window backdrop retained across all modes/songs, focus changes and PINCH toggles'
 
 
 def note_trace(gb, bank, ram_shift):
@@ -647,6 +717,7 @@ def main():
     assert rom[0x14D] == (-sum(rom[0x134:0x14D])-25)&255
     assert int.from_bytes(rom[0x14E:0x150],'big') == (sum(rom)-sum(rom[0x14E:0x150]))&65535
     report = [ui_checks(args.rom,True),ui_checks(args.rom,False)]
+    report.append(menu_palette_checks(args.rom))
     report.extend([mix_checks(args.rom,True),mix_checks(args.rom,False)])
     report.extend([sharing_checks(args.rom,True),sharing_checks(args.rom,False)])
     for variant in [1,2]:

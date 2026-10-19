@@ -36,7 +36,7 @@ The game/music menu is state `$04`. Its code is in bank `$05`:
 
 | ROM offset | Purpose |
 | --- | --- |
-| `$014C48` | Mode-row input call: Select toggles PINCH, then native input |
+| `$014C48` | Mode-row input call: native input, without changing music/PINCH settings |
 | `$014C5B` | Music-row input call: Select toggles PINCH, Left/Right switches sets |
 | `$014C01` | Initialize the extended music tab before enabling the LCD |
 | `$014C61` | VBlank display routine, updates the 1/2 suffix and PINCH strip |
@@ -46,7 +46,8 @@ The game/music menu is state `$04`. Its code is in bank `$05`:
 Left/Right are bits 5/4 of the newly pressed input mask at `$FF83`. Only the
 music-focus wrapper checks these to flip the set and restart the current
 preview, with `$DB0E` also checked defensively. The mode-row wrapper leaves the
-set alone. Select (bit 2) toggles PINCH in either focus without restarting music.
+set alone. Select (bit 2) toggles PINCH only with music focus, also checked via
+`$DB0E`, without restarting music. Mode selection retains the current setting.
 Holding a button changes its setting once. OFF remains silent when the set
 changes. Original input handling continues after the wrapper. The
 display wrapper writes font tile `$A1` (1, DX) or `$A2` (2, GB) at `$99A9`
@@ -75,8 +76,13 @@ and ORing black font pixels into both bitplanes. This preserves the textured
 color backdrop and the monochrome background. The colon is a small embedded
 bitmap; other characters reuse the native font. `PINCH_TILES` lists twenty
 unused positive BG tile IDs, whose VRAM addresses `$9000+` do not overlap sprite
-tiles. Existing background attributes remain intact. VBlank refreshes only the
-ten tilemap entries according to PINCH; no tile graphics are rewritten then.
+tiles. PINCH text is black with music focus and entirely hidden with mode focus
+on both CGB and DMG. Initialization saves the ten original bottom-row tile IDs
+at `$DF9D..DFA6` before replacing any tilemap entries. VBlank chooses the black
+ON/OFF tilemap with music focus, or restores those original IDs with mode focus.
+No tile graphics are rewritten in VBlank. All native BG/OBJ palettes and strip
+attributes are retained; PINCH uses no sprites. BG palette 5 is also used by the
+song-selection window, so it must not be repurposed for the indicator.
 Both menu settings persist in WRAM until reset, with PINCH initialized to ON.
 
 ## Original player and ROM banking
@@ -169,6 +175,7 @@ pointer without this bound would overwrite the patch's control state.
 | `$DF99` | Fractional music-clock phase, 0..3 |
 | `$DF9A` | PINCH enabled, initialized to 1 |
 | `$DF9B..DF9C` | Temporary glyph row mask/counter during menu initialization |
+| `$DF9D..DFA6` | Ten original bottom-row BG tile IDs for hiding PINCH |
 
 While imported BGM plays, native BGM voices are stopped, but DX continues advancing
 its SFX. Native hardware-channel flags at `$DEA0`, `$DEB8`, `$DED0`, and `$DEE8`
@@ -271,8 +278,15 @@ It checks Game Boy and Game Boy Color execution, selection debounce, both menu
 handlers, six previews, OFF, three Marathon music selections, pause/resume, native
 SFX ownership, ROM checksums, and original input hashes. Regression checks verify
 that mode-row Left/Right cannot switch sets, music-focus Left/Right switches
-once per press, Select changes only PINCH, its default is ON, and its strip
-tracks the setting in either focus. They check that the extended border and MUSIC-1/2
+once per press, Select changes only PINCH with music focus, mode-row Select
+retains both ON and OFF, its default is ON, and its strip tracks the setting
+with no text on mode rows and black text in music focus. Pixel checks compare
+the entire hidden 80x8 strip against native DX in both hardware modes, including
+returning from music selection with PINCH OFF. CGB checks verify all native
+BG/OBJ palette sources and compare rendered song-window backdrop/border pixels
+across all four modes, focus changes, all four song choices, and PINCH toggles.
+They also verify palettes on level selection and gameplay. They check
+that the extended border and MUSIC-1/2
 label are correct with both focus states and all song selections, all seven
 inactive letters have matching sprites, and only the pulse-selection call
 changes in the DX sound-driver bank.
