@@ -217,6 +217,52 @@ effects necessarily replaces music on those channels temporarily; the bridge
 prevents the two players from writing conflicting instruments to a channel,
 but cannot provide additional independent hardware voices.
 
+## Channel sharing in the original GB game
+
+The original GB game also prioritizes effects over music. Its `PlaySquareSFX`
+locks pulse 1 (`$DF9F` bit 7); `PlayNoiseSFX` locks noise (`$DFCF` bit 7).
+Movement and rotation use pulse 1 only, unlike DX rotation's additional wave
+voice. Failed movement/rotation cancels the GB effect request in the gameplay
+code, whereas DX's blocked-action effect uses pulse 2.
+
+The song headers at `$6F6B` and `$6F76` enable all four music channels for
+A-TYPE and B-TYPE, including noise percussion. C-TYPE's header at `$6F81`
+enables only the two pulse channels. Thus lock/stack-fall noise effects can
+replace A/B percussion, but do not replace a C-TYPE music part. Ordinary GB
+movement/rotation leaves pulse 2 and wave music available.
+
+Measured channel reservation times in the original Rev 1 ROM:
+
+| Effect | Reserved channels | Audio frames (approximately 59.73 per second) |
+| --- | --- | --- |
+| Movement | Pulse 1 | 2 (~0.033 s) |
+| Rotation | Pulse 1 | 18 (~0.30 s) |
+| Single/double/triple line clear | Pulse 1 | 66 (~1.10 s) |
+| Level up | Pulse 1 | 35 (~0.59 s) |
+| Piece lock | Noise | 18 (~0.30 s) |
+| Stack fall after clearing | Noise | 32 (~0.54 s) |
+| Four-line Tetris | Pulse 1 for the whole effect; all four during its wave sweep | 56 total; final 32 lock all channels (~0.54 s) |
+
+These are ownership durations, not exact audible durations or guaranteed
+silence. The four-line wave sweep locks pulse 2 and noise without explicitly
+silencing their existing notes, so those notes can ring while subsequent music
+notes are suppressed. Overlapping effects may add reservations or replace an
+earlier effect; the table measures isolated requests.
+
+Music section pointers and note timers continue advancing during all seven
+tested effects. The original does not immediately retrigger the current music
+note when an effect releases its channel: normal note output resumes at the
+next scheduled note/rest. Consequently a gap can extend beyond the ownership
+duration. The DX bridge's immediate note restoration avoids that extra wait.
+
+Run `.venv\Scripts\python.exe scripts/inspect_gb_audio.py` to reproduce the
+measurements. It injects native audio requests into the original ROM in DMG
+emulation, checks all three songs at four request timings per effect, verifies
+score progression against a no-effect run and guards against music note output
+on locked channels. The detailed report is
+`output/validation/original_gb_audio.json`. The original ROM file and the DX
+builder/output are unchanged by this inspection.
+
 ## Verification and development tools
 
 `test_rom.py` uses in-memory ROM/save streams and never saves beside the originals.
