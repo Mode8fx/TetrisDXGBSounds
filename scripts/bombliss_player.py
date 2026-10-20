@@ -247,6 +247,20 @@ def compile_player(source, Code, semitones=0):
     bank[0x1176:0x3F00] = source[0x15176:0x17F00]
     bank[:len(payload)] = payload
     songs = locate(source)
+    if semitones:
+        # PUZZLE's four parts reach their first saved-loop marker together
+        # after the opening pickup (40 normal-speed driver ticks). Remove
+        # only its timed notes/rests, retaining setup commands and indices so
+        # instruments, saved loop targets and subsequent repeats stay intact.
+        for stream in songs['PUZZLE']['streams']:
+            pos = stream['start_cpu'] + 4
+            end = stream['end_cpu_inclusive']
+            while pos < end and bank[pos-0x4000] != 0xFD:
+                if bank[pos-0x4000] < 0xA0:
+                    bank[pos-0x4000:pos-0x4000+2] = bytes([0xFE,0])
+                pos += 2
+            if pos == end:
+                raise ValueError('PUZZLE introduction has no saved-loop marker')
     for index, song in enumerate(songs.values()):
         for channel, stream in enumerate(song['streams']):
             entry = bytes([channel*25, channel]) + stream['start_cpu'].to_bytes(2,'little')

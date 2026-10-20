@@ -168,6 +168,25 @@ def pitch_checks(path,cgb,frames):
                 raised_notes.append((patched.memory[GLOBALS+2],patched.register_file.HL))
             original.hook_register(0,0x20F6,normal,None)
             patched.hook_register(BANK+variant,symbols['src_20f6'],raised,None)
+            if selection == 6:
+                # Independent reference: jump past each timed pickup command
+                # in the original interpreter, without editing its score data.
+                # These are the four original first saved-loop boundaries.
+                bounds = [(0x517A,0x5180),(0x5296,0x52A6),
+                          (0x5486,0x548A),(0x556C,0x55A4)]
+                def skip_pickup(_):
+                    pointer = original.register_file.HL
+                    if (any(first <= pointer < end for first,end in bounds)
+                            and original.memory[pointer] < 0xA0):
+                        original.register_file.HL = pointer+2
+                        original.register_file.PC = 0x1F12
+                original.hook_register(0,0x1F1E,skip_pickup,None)
+                loop_starts = {}
+                def main_loop(_):
+                    pointer = patched.register_file.HL
+                    if pointer in (0x5180,0x52A6,0x548A,0x55A4):
+                        loop_starts.setdefault(patched.memory[GLOBALS+2],frame)
+                patched.hook_register(BANK+variant,symbols['src_1f1e'],main_loop,None)
             run_original(0x1D18)
             run_original(0x1D48,native_id)
             run_patched(START,selection)
@@ -191,9 +210,11 @@ def pitch_checks(path,cgb,frames):
                     b = bytes(patched.memory[SLOTS+channel*25:SLOTS+(channel+1)*25])
                     assert a[:17]+a[19:] == b[:17]+b[19:], (selection,variant,frame,channel)
             assert events > frames//30
+            if selection == 6:
+                assert loop_starts == dict.fromkeys(range(4),0), loop_starts
             original.stop(save=False)
             patched.stop(save=False)
-    return f'{"CGB" if cgb else "DMG"}: all MUSIC-3 Danger/Peril scores match source rhythm/instruments; notes raised 2/4 semitones, percussion unchanged over {frames} ticks per song/variant'
+    return f'{"CGB" if cgb else "DMG"}: MUSIC-3 Danger/Peril match source rhythm/instruments with B pickup skipped on all four channels; notes raised 2/4 semitones over {frames} ticks per song/variant'
 
 
 def sharing_checks(path,cgb,variant,song=1):

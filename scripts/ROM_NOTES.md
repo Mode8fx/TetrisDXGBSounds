@@ -360,8 +360,12 @@ pitches raised by two and four semitones. A private 24-entry period table at
 `$4010..403F` avoids changing bytes shared with the original envelope tables.
 The original driver shifts periods for octaves; rounding can differ from an ideal
 transposition by one hardware frequency unit. Noise timbres are unchanged.
-PUZZLE's original introduction and loop behavior are retained in all versions;
-the special GB B-TYPE introduction cut applies only to MUSIC-2.
+MUSIC-3 B-TYPE (PUZZLE) skips its opening pickup in Danger and Peril, removing
+40 normal-speed driver ticks (about 0.67 seconds). In the two variant banks,
+timed notes/rests before each channel's first `$FD` saved-loop marker become
+`$FE 00` no-ops. All four parts therefore start at the main loop together;
+setup commands, command indices, and the original saved-loop behavior remain
+intact. Normal playback and its preview retain the complete original introduction.
 
 ## Channel sharing in the original GB game
 

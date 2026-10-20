@@ -685,7 +685,8 @@ def build(dx: bytes, original: bytes, bombliss: bytes):
     for variant,(name,semitones) in enumerate(VARIANTS):
         bank, symbols = compile_player(bombliss,Code,semitones)
         patch((BOM_BANK+variant)*0x4000, bytes([0xFF])*0x4000, bank,
-              f'{name} Bombliss driver and CONTEST/PUZZLE/TRAINING music; +{semitones} semitones')
+              f'{name} Bombliss driver and CONTEST/PUZZLE/TRAINING music; +{semitones} semitones'
+              + ('; B-TYPE opening pickup skipped' if variant else ''))
         bom_symbols[name] = {k:f'0x{v:04X}' for k,v in symbols.items()}
     if code.origin + len(payload) > 0x3F00: raise ValueError('Control code exceeds free ROM0 region')
     patch(code.origin, bytes(len(payload)), payload, 'Music-bank control code')
