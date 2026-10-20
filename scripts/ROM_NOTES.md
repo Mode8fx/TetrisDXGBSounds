@@ -1,10 +1,11 @@
 # ROM patch implementation
 
-The builder accepts only the SHA-256 hashes in `build_rom.py`. All addresses below
-refer to the supplied World DX ROM and World Rev 1 Tetris ROM. The original
+The builder accepts only the three SHA-256 hashes in `build_rom.py`. Addresses below
+refer to the supplied World DX ROM, World Rev 1 Tetris ROM, and Japanese/English
+Super Bombliss DX ROM as indicated. The original Tetris
 disassembly is used as documentation; RGBDS is not needed to build the patch.
 No copyrighted music bytes are stored in the scripts: the builder reads them from
-the user's Tetris ROM.
+the user's original ROMs.
 
 ## Native DX interface
 
@@ -19,7 +20,7 @@ Danger/Peril IDs are `$5A/$5B` for A, `$5C/$5D` for B, and `$5E/$5F` for C.
 | `$3F00` | Initialize sound | Called after patch state is cleared at startup |
 | `$3F06` | Advance audio | Runs first every frame, retaining native SFX |
 | `$3F0C` | Play SFX | Entry unmodified; original effect data and volume retained; pulse selection adjusted below |
-| `$3F12` | Start BGM | Intercepts A/B/C preview, normal, Danger and Peril IDs when GB is enabled |
+| `$3F12` | Start BGM | Intercepts A/B/C preview, normal, Danger and Peril IDs on either imported music page |
 | `$3F18` | Start BGM if different | Preserves conditional restart behavior |
 | `$3F24` | Suspend BGM | Also freezes and mutes the original player |
 | `$3F2A` | Resume BGM | Also resumes the original player and restores notes |
@@ -44,18 +45,19 @@ The game/music menu is state `$04`. Its code is in bank `$05`:
 | `$014DB5` | Draw the seven-character inactive label on DMG/SGB |
 
 Left/Right are bits 5/4 of the newly pressed input mask at `$FF83`. Only the
-music-focus wrapper checks these to flip the set and restart the current
+music-focus wrapper checks these to cycle the page and restart the current
 preview, with `$DB0E` also checked defensively. The mode-row wrapper leaves the
 set alone. Select (bit 2) toggles PINCH only with music focus, also checked via
 `$DB0E`, without restarting music. Mode selection retains the current setting.
 Holding a button changes its setting once. OFF remains silent when the set
 changes. Original input handling continues after the wrapper. The
-display wrapper writes font tile `$A1` (1, DX) or `$A2` (2, GB) at `$99A9`
+Right cycles DX → GB Tetris → Bombliss → DX; Left cycles in reverse. The
+display wrapper writes font tile `$A1` (1, DX), `$A2` (2, GB), or `$A3` (3, Bombliss) at `$99A9`
 during the existing menu VBlank routine, preserving the VRAM bank.
 
 The tab's left edge moves one tile (8 pixels) left. With the LCD off, the
 initialization wrapper reuses border tiles `$29/$39/$49` at column 2 and fills
-the former edge at column 3. The seven font cells at `$99A3..99A9` read MUSIC-1/2;
+the former edge at column 3. The seven font cells at `$99A3..99A9` read MUSIC-1/2/3;
 the hyphen is `$9F`. CGB attributes use the original text palette 7, with border
 palette 1 retained. Attribute writes are skipped on DMG/SGB by checking that
 VRAM bank 0 can be selected.
@@ -63,8 +65,9 @@ VRAM bank 0 can be selected.
 The original inactive MUSIC sprites use a different font color from the focused
 background label. Seven-character sprite lists preserve that treatment for the
 whole new label, with separate CGB and DMG attributes. At menu initialization,
-font glyphs for -, 1 and 2 are converted to that sprite color in three otherwise
-unused menu tiles (`$9B/$C8/$C9`). The CGB wrapper replaces the label drawing
+font glyphs for -, 1, 2 and 3 are converted to that sprite color in four otherwise
+unused menu tiles (`$9B/$C8/$C9/$D0`). Tile `$CA` belongs to the song-title graphics
+and must remain intact. The CGB wrapper replaces the label drawing
 call; the DMG wrapper replaces only the inactive label and retains the native
 song cursor when music has focus. Original ROM graphics and other menus' sprite
 lists remain intact.
@@ -97,7 +100,10 @@ because MBC1 remaps an upper-window bank whose low five bits are zero.
 Control code occupies previously zero-filled fixed ROM starting at `$3400`.
 `Code` emits the instructions, resolves labels, and records symbol addresses in
 the build report. Expanded-bank calls disable interrupts, save DX's bank shadow
-at `$FFFD`, set MBC1's high bank register, and select bank `$21 + variant`.
+at `$FFFD`, set MBC1's high bank register, and select bank `$21 + variant` for
+GB Tetris or `$24 + variant` for Bombliss. `$DF91` identifies the active player,
+independently of the selected menu page, so stopping a player still selects its
+own bank after a page change.
 The high register
 is cleared and the prior low bank restored before interrupts are re-enabled.
 This prevents DX's VBlank routines from seeing the wrong high bank bits.
@@ -122,7 +128,7 @@ of version starts the song once, while repeated requests leave it advancing.
 At 17 rows DX uses a separate shared alarm (`$4C`); that alarm remains native
 when PINCH is ON. With PINCH OFF, a checked hook at ROM `$004C47` sends every
 height decision to the original normal-music path at CPU `$4C4B`, using `$AC0E`.
-This suppresses Danger, Peril, and the final alarm for both music sets, and zero
+This suppresses Danger, Peril, and the final alarm for all three pages, and zero
 still means music OFF. The existing conditional BGM call prevents repeated
 height checks from restarting the normal song. Actual stack height and other
 gameplay behavior are retained. PINCH ON follows the original thresholds.
@@ -163,19 +169,20 @@ pointer without this bound would overwrite the patch's control state.
 
 | RAM | Meaning |
 | --- | --- |
-| `$DF90` | Selected set: 0 = DX, 1 = GB |
-| `$DF91` | Original music active |
+| `$DF90` | Selected page: 0 = DX, 1 = GB, 2 = Bombliss |
+| `$DF91` | Active imported player: 0 = none, 1 = GB, 2 = Bombliss |
 | `$DF92` | Original music paused |
 | `$DF93` | Saved native ROM bank |
 | `$DF94` | Last original preview/gameplay request ID |
 | `$DF95` | Unconditional versus conditional BGM request |
 | `$DF96` | Restore current notes on resume |
 | `$DF97` | Native NR51 routing snapshot for the current audio update |
-| `$DF98` | GB variant: 0 normal, 1 Danger, 2 Peril |
+| `$DF98` | Imported music variant: 0 normal, 1 Danger, 2 Peril |
 | `$DF99` | Fractional music-clock phase, 0..3 |
 | `$DF9A` | PINCH enabled, initialized to 1 |
 | `$DF9B..DF9C` | Temporary glyph row mask/counter during menu initialization |
 | `$DF9D..DFA6` | Ten original bottom-row BG tile IDs for hiding PINCH |
+| `$DFA7` | Active imported song: 5 = A, 6 = B, 7 = C; 0 when stopped |
 
 While imported BGM plays, native BGM voices are stopped, but DX continues advancing
 its SFX. Native hardware-channel flags at `$DEA0`, `$DEB8`, `$DED0`, and `$DEE8`
@@ -196,14 +203,56 @@ the effect's waveform.
 
 ## Original effects and channel handoff
 
+### MUSIC-1 channel use
+
+`inspect_dx_channels.py` traces the unmodified DX ROM in CGB mode, requesting
+each native song through its music API and identifying the owning virtual voice
+at the four hardware-channel structures after every audio update. Each song is
+observed for 7,200 frames. Observed channel use is:
+
+| DX song | Preview / normal gameplay | Danger | Peril |
+| --- | --- | --- | --- |
+| A-TYPE | Pulse 1, pulse 2, wave, noise | All four | All four |
+| B-TYPE | Pulse 1, pulse 2, wave, noise | All four | Pulse 1 and wave |
+| C-TYPE | Pulse 1, pulse 2, wave, noise | All four | Pulse 1, pulse 2 and wave |
+
+This records use over the arrangement, not continuous simultaneous sound from
+all listed channels. The two reduced Peril arrangements also have only two/three
+virtual voices in their native song-table entries, respectively.
+
+Movement `$22` uses pulse 2; rotation `$21` uses pulse 2 and wave; blocked actions
+`$28` use pulse 2. Thus all three ordinary songs share channels with these
+effects. Priority arbitration at native bank `$0C:$4B46..4B58` lets the effect
+replace that channel's music output while other music parts remain available.
+Moving an effect between pulse channels changes which musical part it interrupts.
+In B-TYPE Peril, movement/blocked actions can use the otherwise unused pulse 2,
+although rotation still borrows wave. C-TYPE Peril leaves noise unused.
+
+The script also measures fifteen effect IDs in normal A/B/C gameplay. In the
+sampled A-TYPE run, movement owned pulse 2 for six audio updates; rotation owned
+pulse 2 for 27 and wave for 12. These are ownership spans, not guaranteed audible
+durations. Other tested effects use noise, pulse 1, both pulse channels, or
+combinations with wave; neither pulse channel is reserved exclusively for SFX.
+Detailed per-song/effect ownership counts are in
+`output/validation/dx-channel-usage.json`. Run
+`.venv\Scripts\python.exe scripts/inspect_dx_channels.py` to reproduce the trace.
+This inspection does not modify either the original or patched ROM.
+
+### Imported music routing
+
 Native rotation (`$21`) uses both a wave voice and pulse 2; movement (`$22`) and
 blocked actions (`$28`) use pulse 2. During active, unpaused GB music, movement
-and rotation's pulse voice use pulse 1 instead. Rotation retains its wave voice;
-blocked actions and other effects retain their native assignments. DX music
-keeps all native assignments.
+and rotation's pulse voice use pulse 1 instead. MUSIC-3 uses pulse 2 for A-TYPE
+and pulse 1 for B-TYPE/C-TYPE. These choices apply to normal, Danger and Peril.
+Rotation retains its wave voice; blocked actions and other effects retain their
+native assignments. DX music keeps its native pulse-2 routing.
 
 The call at ROM `$030B0C` (bank `$0C`, CPU `$4B0C`) normally selects pulse 2 via
-`$4178`. Its replacement checks the GB player's active/pause flags, native SFX
+`$4178`. Its replacement enables pulse 1 for the GB player (`$DF91 = 1`) or the
+Bombliss player (`$DF91 = 2`) playing song 6/7 at `$DFA7`. The bridge stores this
+normalized song ID before starting any preview or normal/Danger/Peril version,
+so routing follows the actual song rather than the last menu cursor position.
+It also checks the pause flag, native SFX
 processing flag (`$DC80` bit 5), and virtual voice ID (`+$05..06`). Only SFX IDs
 `$0021` and `$0022` select pulse 1 via `$416F`. Both native selectors initialize
 the hardware voice and register base before the original driver continues.
@@ -221,8 +270,98 @@ advancing during effects, so the parts remain synchronized when they return.
 
 The Game Boy has four shared hardware channels. Keeping full multi-channel
 effects necessarily replaces music on those channels temporarily; the bridge
-prevents the two players from writing conflicting instruments to a channel,
+prevents the music and effect players from writing conflicting instruments to a channel,
 but cannot provide additional independent hardware voices.
+
+## MUSIC-3: Super Bombliss DX
+
+MUSIC-3 maps CONTEST to A-TYPE, PUZZLE to B-TYPE, and TRAINING to C-TYPE.
+[BOMBLISS_MUSIC_NOTES.md](BOMBLISS_MUSIC_NOTES.md) lists the verified source
+addresses and the repeatable discovery script. This format needs its own player;
+`bombliss_player.py` relocates the original Bombliss driver rather than translating
+its scores into either Tetris format.
+
+Banks `$24/$25/$26` contain normal/Danger/Peril copies of that player. Source ROM0
+code/data `$1D48..25B2` is reassembled into the banked window, with explicit
+instruction/data ranges, labels for every source instruction/data byte, relocated
+absolute operands, and relative branches expanded to absolute branches. The
+original driver's bank switching is removed because the fixed-bank bridge owns
+MBC1. The copied score data retains its original CPU addresses beginning at
+`$5176`, including its setup headers, instruments, introductions and loop commands.
+The builder checks that the relocated code and helpers fit before that score data.
+Only the twelve selected channel descriptors are needed; they reside at `$7F00`.
+The driver processes four music slots, with its original two SFX slots omitted.
+
+The banked API is:
+
+| CPU address | Purpose |
+| --- | --- |
+| `$4000` | Initialize/start A/B/C, A = 5/6/7 (same bridge IDs as GB Tetris) |
+| `$4003` | Synchronize SFX ownership, restore released channels, advance music |
+| `$4006` | Mute music on channels free of native DX effects |
+| `$4009` | Extra music step for the fractional clock, after ownership is synchronized |
+
+The two imported players are mutually exclusive and share the lower scratch area:
+
+| WRAM while Bombliss is active | Purpose |
+| --- | --- |
+| `$DF00..DF63` | Four original 25-byte music channel states |
+| `$DF64..DF6C` | Relocated source globals `$C396..C39E` |
+| `$DF6E` | Four DX SFX ownership bits |
+| `$DF70..DF88` | Relocated source HRAM scratch `$FFE6..FFFE` |
+| `$DF8F` | Temporary value used to preserve CPU flags during APU reads |
+| `$DFA8..DFBE` | Private register state corresponding to `$FF10..FF26` |
+| `$DFBF..DFCE` | Private 16-byte waveform |
+
+Relocating the source HRAM is essential: its `$FFFD` byte is a command index,
+whereas DX uses `$FFFD` as its bank shadow. No source HRAM accesses remain.
+All shared menu/bridge state at `$DF90..DFA6` is preserved. Playback/SFX checks
+sample the bridge's deepest APU helpers and verify that the stack stays above
+the private register/wave area (observed minimum `$DFE3`).
+
+Bombliss's driver always updates its private register state, including while DX
+owns a hardware channel. Actual music register writes and waveform uploads are
+blocked on effect-owned channels. Its virtual wave-active bit models DAC disable
+and note triggers independently of DX effects; this preserves the original
+driver's wave retrigger decisions. Indirect APU reads use the private values,
+so an effect's volume/duty cannot change a music envelope. On channel release or
+unpause, the bridge restores the private registers and waveform before advancing
+the score. Note pointers, envelopes and timers continue in sync during effects.
+This still uses shared hardware channels: an effect temporarily replaces the
+music on the channels it owns, just as on MUSIC-2.
+
+DX retains master volume control. MUSIC-3 alone has a uniform half-level
+attenuation: physical pulse/noise initial-volume nibbles are halved (rounded down),
+and each physical wave sample maps `n -> floor(n/2) + 4`, halving its swing around
+the DAC midpoint. Wave output-level codes and pulse/noise envelope direction and
+period are retained. The same conversion is used by all songs and variants,
+including notes/waveforms restored after SFX or pause. The private register state,
+private waveform, scores and envelopes retain their source values. This lets the
+original driver continue reading its own state while only physical music output
+is reduced. DX master volume and native SFX writes are unaffected.
+
+Equal 1,200-frame CGB preview captures measured MUSIC-3 A/B/C RMS levels of
+12.097/9.153/9.774 before attenuation and 6.408/5.320/5.459 afterwards, reductions
+of approximately 5.5/4.7/5.1 dB. The same half-level conversion is applied to every
+song; hardware envelopes and 4-bit quantization make measured RMS reductions
+differ slightly. MUSIC-1/2 captures were identical before and after. For reference,
+their A/B/C RMS levels were 5.193/4.071/4.182 and 6.412/6.053/3.058, respectively.
+These are relative emulator sample measurements, not calibrated acoustic levels.
+
+Free Bombliss channels retain the score's stereo
+panning and mute commands, while channels owned by DX effects retain native DX
+routing. A real waveform upload invalidates DX's waveform cache. Movement and
+rotation use pulse 2 for MUSIC-3 A-TYPE and pulse 1 for B-TYPE/C-TYPE, including
+Danger/Peril; rotation also retains its wave
+voice. All native effect streams, envelopes, priorities and volumes remain intact.
+
+Danger and Peril retain the Bombliss scores, with 1.25x and 1.5x clocks and tonal
+pitches raised by two and four semitones. A private 24-entry period table at
+`$4010..403F` avoids changing bytes shared with the original envelope tables.
+The original driver shifts periods for octaves; rounding can differ from an ideal
+transposition by one hardware frequency unit. Noise timbres are unchanged.
+PUZZLE's original introduction and loop behavior are retained in all versions;
+the special GB B-TYPE introduction cut applies only to MUSIC-2.
 
 ## Channel sharing in the original GB game
 
@@ -286,14 +425,14 @@ returning from music selection with PINCH OFF. CGB checks verify all native
 BG/OBJ palette sources and compare rendered song-window backdrop/border pixels
 across all four modes, focus changes, all four song choices, and PINCH toggles.
 They also verify palettes on level selection and gameplay. They check
-that the extended border and MUSIC-1/2
+that the extended border and MUSIC-1/2/3
 label are correct with both focus states and all song selections, all seven
 inactive letters have matching sprites, and only the pulse-selection call
 changes in the DX sound-driver bank.
 Mixer hooks check
 that pulse/noise envelope values and the wave-volume conversion retain their
-native values with both music sets. Movement/rotation channel checks verify
-pulse 1 with GB music and pulse 2 with DX music, retaining rotation's wave voice
+native values on all three pages. Movement/rotation channel checks verify
+pulse 1 with GB/Bombliss B/C and pulse 2 with DX/Bombliss A, retaining rotation's wave voice
 and blocked actions' pulse 2. Channel-sharing checks exercise the original
 piece effects, verify their hardware channel usage, and compare music state with
 a run without effects. A deliberately left-routed effect checks that music does
@@ -328,3 +467,36 @@ decimal addresses. `inspect_dx.py --rom ROM --steps '600,start,120,...'` capture
 screenshots, WRAM, save states, and sound API calls for reverse engineering.
 Neither tool is required by the end user. The builder imports the disassembler
 to locate instruction boundaries for WRAM relocation.
+
+`test_bombliss_music.py` adds MUSIC-3 checks in CGB and DMG modes. It verifies both
+directions of three-page wrapping, held-key debounce, glyphs and native song-title
+graphics, previews, OFF, menu lockout, gameplay, pause/resume, real height decisions
+and PINCH behavior. A driver harness runs unmodified Bombliss routines and the
+ported player one music step at a time: all four channel states match over 7,200
+ticks per normal song. Private wave data and panning match the source; actual
+wave uploads and pulse/noise registers are checked against the half-level output.
+All Danger/Peril scores are compared against source rhythm/instruments and note
+frequencies over the same interval. Real gameplay checks verify fractional clocks.
+Thirteen DX SFX requests are exercised for each variant, checking channel/waveform
+ownership, routing, unchanged music progression/private instruments and release
+handling. Comparisons occur at completed audio updates because native SFX work
+can cross a video-frame boundary. Reports include the output ROM's SHA-256.
+
+Full checks with the existing virtual environment:
+
+```powershell
+python scripts/build_rom.py
+.venv\Scripts\python.exe scripts/test_rom.py
+.venv\Scripts\python.exe scripts/test_bombliss_music.py
+```
+
+The builder needs only Python's standard library; the two emulator suites need
+`requirements-test.txt`. Output remains `output/Tetris DX - GB Sounds.gbc`.
+
+`measure_music_volume.py` measures all nine normal previews over equal intervals
+using in-memory saves, without gameplay SFX. Run
+`.venv\Scripts\python.exe scripts/measure_music_volume.py` for 1,200 frames per
+song; `--frames`, `--rom`, and `--output` override its defaults. Its JSON report
+includes the ROM hash, DC-removed RMS, peak values, and capture length. The volume
+adjustment's before/after measurements are in
+`output/validation/music-volume-before.json` and `music-volume-after.json`.

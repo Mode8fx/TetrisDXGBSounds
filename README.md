@@ -1,8 +1,12 @@
 # Tetris DX: GB Sounds
 
-Tetris DX: GB Sounds is a ROM hack of Tetris DX that adds the A-TYPE, B-TYPE, and C-TYPE music from the original Game Boy Tetris. The DX music still exists as "MUSIC-1", while the Game Boy music has been added as "MUSIC-2".
+Tetris DX: GB Sounds is a ROM hack of Tetris DX that adds six additional music tracks to the main gameplay, bringing the total to nine songs across three pages.
 
-It also adds the ability to toggle the pinch (speed-up) music on/off by pressing Select while selecting music. The black PINCH text appears only while selecting music and is hidden while selecting a game mode.
+MUSIC-1: Original Tetris DX music
+MUSIC-2: Tetris (GB) [A-TYPE / B-TYPE / C-TYPE]
+MUSIC-3: Super Bombliss DX [CONTEST / PUZZLE / TRAINING]
+
+It also adds the ability to toggle the pinch (speed-up) music on/off by pressing Select while selecting music.
 
 The download can be found [here](https://github.com/Mode8fx/Tetris-DX-GB-Sounds/tree/main/patches).
 

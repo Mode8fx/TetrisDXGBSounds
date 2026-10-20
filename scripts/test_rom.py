@@ -12,7 +12,7 @@ from pyboy import PyBoy
 from build_rom import (ROOT, DX_NAME, GB_NAME, OUTPUT_NAME, HASHES, ENABLED,
                        ACTIVE, PAUSED, LAST_ID, ENGINE_BANK, CURRENT_MUSIC,
                        MUSIC_VARIANT, MUSIC_PHASE, START_MUSIC, PINCH_ENABLED,
-                       PINCH_TILES, PINCH_BACKDROP)
+                       PINCH_TILES, PINCH_BACKDROP, LABEL_SHADOW_TILES)
 from build_rom import control_code
 
 OUT = ROOT/'output'/'validation'
@@ -75,8 +75,8 @@ def ui_checks(path, cgb):
         suffix = 0xA1+gb.memory[ENABLED]
         assert bytes(gb.memory[0,0x9982:0x9984]) == bytes.fromhex('29 2a')
         assert bytes(gb.memory[0,0x99C2:0x99C4]) == bytes.fromhex('49 4a')
-        assert bytes(gb.memory[0,0x99A2:0x99AB]) == bytes.fromhex('39 8c 94 92 88 82 9f')+bytes([suffix,0x7F]), 'Extended tab must read MUSIC-1 (DX) or MUSIC-2 (GB)'
-        for source, shadow in [(0x8A10,0x8C80),(0x8A20,0x8C90)]:
+        assert bytes(gb.memory[0,0x99A2:0x99AB]) == bytes.fromhex('39 8c 94 92 88 82 9f')+bytes([suffix,0x7F]), 'Extended tab must read MUSIC-1/2/3'
+        for source, shadow in [(0x8A10,0x8C80),(0x8A20,0x8C90),(0x8A30,0x8D00)]:
             for row in range(8):
                 bits = gb.memory[0,source+row*2+1]
                 assert bytes(gb.memory[0,shadow+row*2:shadow+row*2+2]) == bytes([bits^255,bits]), 'Inactive label must use digit glyphs'
@@ -100,7 +100,7 @@ def ui_checks(path, cgb):
             assert ImageChops.difference(current,backdrop_image).getbbox() is None, 'PINCH must be entirely hidden on mode rows'
         if not gb.memory[0xDB0E]:
             sprites = [tuple(gb.memory[a:a+4]) for a in range(0xFE00,0xFEA0,4)]
-            for x,tile in zip(range(0x20,0x51,8),[0xB0,0xB1,0xB2,0xB3,0xB4,0x9B,0xC8+gb.memory[ENABLED]]):
+            for x,tile in zip(range(0x20,0x51,8),[0xB0,0xB1,0xB2,0xB3,0xB4,0x9B,LABEL_SHADOW_TILES[gb.memory[ENABLED]]]):
                 assert (0x78,x,tile,0x14 if cgb else 0) in sprites, 'Highlight must cover all seven characters at the new position'
     gb.screen.image.save(OUT/f'{mode}-dx-menu.png')
     assert gb.memory[ENABLED] == 0 and gb.memory[PINCH_ENABLED] == 1
@@ -151,11 +151,11 @@ def ui_checks(path, cgb):
     # Music focus is a separate menu input routine; verify both hooks.
     press(gb,'a')
     assert gb.memory[0xDB0E] == 1
-    for enabled,button in [(0,'left'),(1,'right'),(0,'right')]:
+    for enabled,button in [(0,'left'),(1,'right'),(2,'right'),(0,'right')]:
         press(gb,button)
         assert gb.memory[ENABLED] == enabled
         check_music_tab()
-        gb.screen.image.save(OUT/f'{mode}-{"gb" if enabled else "dx"}-music-focus.png')
+        gb.screen.image.save(OUT/f'{mode}-{("dx","gb","bombliss")[enabled]}-music-focus.png')
     native_song = gb.memory[0xDC9B]
     press(gb,'select',hold=120)
     assert gb.memory[PINCH_ENABLED] == 0 and gb.memory[ENABLED] == 0
@@ -173,9 +173,9 @@ def ui_checks(path, cgb):
             if selection == 4:
                 assert gb.memory[ACTIVE] == 0
                 assert sound_energy(gb,120) == 0, 'OFF must silence the BGM'
-                press(gb,'right')
-                assert gb.memory[ACTIVE] == 0
-                press(gb,'right')
+                for _ in range(3):
+                    press(gb,'right')
+                    assert gb.memory[ACTIVE] == 0
             elif enabled:
                 assert gb.memory[ACTIVE] == 1
                 assert gb.memory[CURRENT_MUSIC] == selection+4
@@ -354,10 +354,11 @@ def mix_checks(path, cgb):
     for address,callback in [(0x4FD8,volume_before),(0x4FDB,volume_after),
                              (0x4FF3,wave_before),(0x4FF9,wave_after)]:
         gb.hook_register(12,address,callback,None)
-    for imported in [False,True]:
+    for imported,selection in [(0,1),(1,1),(2,1),(2,2),(2,3)]:
         restore(gb,menu)
         press(gb,'a')
-        if imported: press(gb,'right')
+        for _ in range(imported): press(gb,'right')
+        for _ in range(selection-1): press(gb,'down')
         press(gb,'a',settle=120)
         press(gb,'a',settle=120)
         gameplay = snapshot(gb)
@@ -370,16 +371,16 @@ def mix_checks(path, cgb):
             desired_id[0] = sound_id
             effect_channels.clear()
             press(gb,'a',settle=40)
-            expected = {0x21: {0 if imported else 1,2},
-                        0x22: {0 if imported else 1}, 0x28: {1}}
+            pulse = 0 if imported == 1 or (imported == 2 and selection > 1) else 1
+            expected = {0x21: {pulse,2}, 0x22: {pulse}, 0x28: {1}}
             if sound_id in expected:
                 assert effect_channels == expected[sound_id], (
-                    f'Effect {sound_id:02x}, GB={imported}: channels {effect_channels}')
+                    f'Effect {sound_id:02x}, page={imported+1}, song={selection}: channels {effect_channels}')
         gb.hook_deregister(0,0x3F0C)
     assert not errors, errors[:3]
     assert all(counts.values()), f'Did not exercise all native volume paths: {counts}'
     gb.stop(save=False)
-    return f'{"cgb" if cgb else "dmg"}: native SFX volumes preserved; movement/rotation use pulse 1 with GB and pulse 2 with DX'
+    return f'{"cgb" if cgb else "dmg"}: native SFX volumes preserved; movement/rotation use pulse 1 with GB/Bombliss B/C, pulse 2 with DX/Bombliss A'
 
 
 def sharing_checks(path,cgb,variant=0):

@@ -1,4 +1,4 @@
-"""Build Tetris DX with selectable original-Tetris music and a PINCH setting.
+"""Build Tetris DX with Tetris/Bombliss music pages and a PINCH setting.
 
 Only Python's standard library is required. Input revisions are checked by SHA-256.
 See scripts/ROM_NOTES.md for the verified hook addresses and memory layout.
@@ -11,6 +11,10 @@ import json
 from pathlib import Path
 
 from gb_disasm import instruction
+from bombliss_player import (compile_player, ROM_NAME as BOM_NAME, SHA256 as BOM_HASH,
+                             BANK as BOM_BANK, START as BOM_START,
+                             FRAME as BOM_FRAME, MUTE as BOM_MUTE, TICK as BOM_TICK,
+                             shadow as bom_shadow)
 
 ROOT = Path(__file__).resolve().parents[1]
 DX_NAME = 'Tetris DX (World) (SGB Enhanced) (GB Compatible).gbc'
@@ -19,6 +23,7 @@ OUTPUT_NAME = 'Tetris DX - GB Sounds.gbc'
 HASHES = {
     DX_NAME: 'd349dc93423c6abcd775d3b6a8797df715a44a42ec837afb21bf17ae43b40a9e',
     GB_NAME: '0d6535aef23969c7e5af2b077acaddb4a445b3d0df7bf34c8acef07b51b015c3',
+    BOM_NAME: BOM_HASH,
 }
 
 # Original engine DF70..DFFF is moved down $70, leaving DX's DC80..DEFF
@@ -34,6 +39,8 @@ PINCH_ENABLED, GLYPH_BITS, GLYPH_ROWS = 0xDF9A, 0xDF9B, 0xDF9C
 PINCH_TILES = bytes([0x24,0x26,0x27,0x28,0x2D,0x2E,0x2F,0x38,0x3A,0x3B,
                      0x3C,0x3D,0x3E,0x3F,0x44,0x45,0x46,0x47,0x48,0x4B])
 PINCH_BACKDROP = 0xDF9D  # ten original bottom-row tile IDs, restored on mode rows
+IMPORTED_SONG = 0xDFA7  # normalized A/B/C ID 5/6/7, shared across variants
+LABEL_SHADOW_TILES = (0xC8, 0xC9, 0xD0)
 VARIANTS = [('Normal', 0), ('Danger', 2), ('Peril', 4)]
 NEW_MUSIC, CURRENT_MUSIC = 0xDF78, 0xDF79
 START_MUSIC, PLAY_MUSIC, MUTE = 0x6A21, 0x6C44, 0x69C7
@@ -82,7 +89,7 @@ def control_code():
     c = Code(0x3400)
     c.mark('init')
     c.emit('af')
-    for var in [ENABLED, ACTIVE, PAUSED, LAST_ID, FORCE_RESTART, RESTORE_ALL, NATIVE_PAN, MUSIC_VARIANT, MUSIC_PHASE]: c.store_a(var)
+    for var in [ENABLED, ACTIVE, PAUSED, LAST_ID, FORCE_RESTART, RESTORE_ALL, NATIVE_PAN, MUSIC_VARIANT, MUSIC_PHASE, IMPORTED_SONG]: c.store_a(var)
     c.emit('3e 01')
     c.store_a(PINCH_ENABLED)
     c.jp(0x3F00)
@@ -94,7 +101,13 @@ def control_code():
     c.store_a(SAVED_BANK)
     c.emit('3e 01 ea 00 40')
     c.ld_a(MUSIC_VARIANT)
-    c.emit('c6 01 ea 00 20 c6 20 e0 fd c9')  # banks $21/$22/$23
+    c.emit('c6 01 47')
+    c.ld_a(ACTIVE)
+    c.emit('fe 02 78')
+    c.op(0xC2,'bank_selected')
+    c.emit('c6 03')
+    c.mark('bank_selected')
+    c.emit('ea 00 20 c6 20 e0 fd c9')  # GB $21..23 / Bombliss $24..26
     c.mark('bank_out')
     c.emit('af ea 00 40')
     c.ld_a(SAVED_BANK)
@@ -105,10 +118,10 @@ def control_code():
     c.emit('a7 c8')
     c.emit('c5 d5 e5')
     c.call('bank_in')
-    c.call(MUTE)
+    c.call('mute_imported')
     c.call('bank_out')
     c.emit('af')
-    for var in [ACTIVE, PAUSED, CURRENT_MUSIC, MUSIC_VARIANT]: c.store_a(var)
+    for var in [ACTIVE, PAUSED, CURRENT_MUSIC, MUSIC_VARIANT, IMPORTED_SONG]: c.store_a(var)
     c.emit('e1 d1 c1 c9')
 
     # BGM APIs $3F12 and $3F18 have different restart semantics.
@@ -161,18 +174,27 @@ def control_code():
     c.emit('79')
     c.emit('d6 32')  # $37..39 -> original song IDs 5..7
     c.mark('original_bgm')
+    c.store_a(IMPORTED_SONG)
     c.emit('c5 f5')
     c.emit('79')
     c.store_a(LAST_ID)
     c.emit('01 00 00')
     c.call('native_start')  # Stop DX BGM, retaining its SFX voices.
+    c.ld_a(ENABLED)
+    c.store_a(ACTIVE)  # player identity, independent of the selected menu page
     c.call('bank_in')
     c.emit('f1')
+    c.emit('47')
+    c.ld_a(ACTIVE)
+    c.emit('fe 02 78')
+    c.op(0xCA,'start_bombliss')
     c.store_a(NEW_MUSIC)
     c.call(0x69A5)  # Clear locks / init original player.
     c.call(START_MUSIC)
-    c.emit('3e 01')
-    c.store_a(ACTIVE)
+    c.jp('imported_started')
+    c.mark('start_bombliss')
+    c.call(BOM_START)
+    c.mark('imported_started')
     c.emit('af')
     c.store_a(PAUSED)
     c.store_a(RESTORE_ALL)
@@ -199,7 +221,7 @@ def control_code():
     c.store_a(PAUSED)
     c.emit('c5 d5 e5')
     c.call('bank_in')
-    c.call(MUTE)
+    c.call('mute_imported')
     c.call('bank_out')
     c.emit('e1 d1 c1')
     c.mark('native_pause')
@@ -225,6 +247,9 @@ def control_code():
     c.ld_a(PAUSED)
     c.emit('a7 c0 c5 d5 e5')
     c.call('bank_in')
+    c.ld_a(ACTIVE)
+    c.emit('fe 02')
+    c.op(0xCA,'bombliss_frame')
     # Each native hardware channel's bit 7 marks an active sound effect now
     # that the native BGM has been stopped. Let that SFX own the channel.
     for channel, (native, lock) in enumerate(zip([0xDEA0,0xDEB8,0xDED0,0xDEE8], [0xDF2F,0xDF3F,0xDF4F,0xDF5F])):
@@ -244,6 +269,12 @@ def control_code():
     c.emit('af')
     c.store_a(RESTORE_ALL)
     c.call(PLAY_MUSIC)
+    c.jp('music_clock')
+    c.mark('bombliss_frame')
+    c.call(BOM_FRAME)
+    c.emit('af')
+    c.store_a(RESTORE_ALL)
+    c.mark('music_clock')
     # The whole score advances at 1x / 1.25x / 1.5x. Use a fractional clock,
     # keeping note lengths intact so different rhythms cannot drift apart.
     # Native effects are still updated exactly once per video frame above.
@@ -254,25 +285,42 @@ def control_code():
     c.op(0xDA, 'save_music_phase')
     c.emit('d6 04')
     c.store_a(MUSIC_PHASE)
-    c.call(PLAY_MUSIC)
+    c.call('tick_imported')
     c.jp('frame_music_done')
     c.mark('save_music_phase')
     c.store_a(MUSIC_PHASE)
     c.mark('frame_music_done')
-    # Music is stereo on free channels. Effect-owned channels retain exactly
-    # the routing/mute bits produced by DX, even across later music frames.
-    c.emit('0e 00')
+    # GB uses stereo; Bombliss retains its score's panning/mute commands.
+    # Effect-owned channels retain exactly the routing produced by DX.
+    c.ld_a(NATIVE_PAN)
+    c.emit('4f')
+    c.ld_a(ACTIVE)
+    c.emit('fe 02 06 ff')
+    c.op(0xC2,'music_pan_ready')
+    c.ld_a(bom_shadow(0x25))
+    c.emit('47')
+    c.mark('music_pan_ready')
     for channel,mask in enumerate([0x11,0x22,0x44,0x88]):
-        c.ld_a(0xDF2F+channel*16)
+        c.ld_a([0xDEA0,0xDEB8,0xDED0,0xDEE8][channel])
         c.emit('e6 80')
         c.op(0xC2,f'pan_done_{channel}')
-        c.emit(f'79 f6 {mask:02x} 4f')
+        c.emit(f'79 e6 {255-mask:02x} 4f 78 e6 {mask:02x} b1 4f')
         c.mark(f'pan_done_{channel}')
-    c.ld_a(NATIVE_PAN)
-    c.emit('b1 e0 25')
+    c.emit('79 e0 25')
     c.mark('frame_mix_done')
     c.call('bank_out')
     c.emit('e1 d1 c1 c9')
+
+    c.mark('tick_imported')
+    c.ld_a(ACTIVE)
+    c.emit('fe 02')
+    c.op(0xCA,BOM_TICK)
+    c.jp(PLAY_MUSIC)
+    c.mark('mute_imported')
+    c.ld_a(ACTIVE)
+    c.emit('fe 02')
+    c.op(0xCA,BOM_MUTE)
+    c.jp(MUTE)
 
     # Restore the current note as soon as an SFX releases a channel, or the
     # player unpauses. The song's note timers and sequence pointers stay put.
@@ -327,13 +375,22 @@ def control_code():
     c.emit('e6 80 c0 3e 40 e0 1c c9')
 
     # At DX's pulse-2 selection call, HL points to the virtual voice's
-    # instrument type (+$0B). Route only movement/rotation SFX to pulse 1.
+    # instrument type (+$0B). GB and Bombliss B/C use pulse 1 for
+    # movement/rotation; DX and Bombliss A retain pulse 2.
     # The original selectors initialize the same channel state and I/O base;
     # all note streams, envelopes, priorities and durations remain native.
     c.mark('select_effect_pulse')
     c.ld_a(ACTIVE)
-    c.emit('a7')
-    c.op(0xCA,'native_pulse_2')
+    c.emit('fe 01')
+    c.op(0xCA,'pulse_1_candidate')
+    c.emit('fe 02')
+    c.op(0xC2,'native_pulse_2')
+    c.ld_a(IMPORTED_SONG)
+    c.emit('fe 06')
+    c.op(0xDA,'native_pulse_2')
+    c.emit('fe 08')
+    c.op(0xD2,'native_pulse_2')
+    c.mark('pulse_1_candidate')
     c.ld_a(PAUSED)
     c.emit('a7')
     c.op(0xC2,'native_pulse_2')
@@ -362,7 +419,17 @@ def control_code():
     c.ld_a(0xDB0E)
     c.emit('a7 c8')
     c.ld_a(ENABLED)
-    c.emit('ee 01')
+    c.emit('47 f0 83 e6 10 78')
+    c.op(0xCA,'page_left')
+    c.emit('3c fe 03')
+    c.op(0xDA,'page_ready')
+    c.emit('af')
+    c.jp('page_ready')
+    c.mark('page_left')
+    c.emit('3d fe ff')
+    c.op(0xC2,'page_ready')
+    c.emit('3e 02')
+    c.mark('page_ready')
     c.store_a(ENABLED)
     # When music has focus, restart the selected preview immediately.
     c.ld_a(0xDB0D)
@@ -383,7 +450,7 @@ def control_code():
     c.store_a(PINCH_ENABLED)
     c.emit('c9')
 
-    # Apply to DX and GB at the shared height decision. Conditional BGM APIs
+    # Apply to all pages at the shared height decision. Conditional BGM APIs
     # then retain the current normal song instead of restarting it each frame.
     c.mark('height_music')
     c.emit('f5')
@@ -398,7 +465,7 @@ def control_code():
     c.jp(0x4C4B)
 
     # Menu initialization still has the LCD off. Extend the left edge one tile
-    # and use seven font cells for MUSIC-1/2. Reuse the original border/font.
+    # and use seven font cells for MUSIC-1/2/3. Reuse the original border/font.
     c.mark('menu_layout')
     c.store_a(0xC0A8)  # displaced initialization instruction
     c.emit('f0 4f f5 af e0 4f')
@@ -419,11 +486,11 @@ def control_code():
     c.ld_a(ENABLED)
     c.emit('c6 a1')
     c.store_a(0x99A9)
-    # Extend the native inactive-label highlight with -, 1 and 2 glyphs.
-    # These three blank menu tiles have no tilemap/sprite users here. Convert
+    # Extend the native inactive-label highlight with -, 1, 2 and 3 glyphs.
+    # These four menu tiles have no tilemap/sprite users here. Convert
     # font color 3 to the native MUSIC overlay's color 2, background color 1.
     c.emit('c5 d5 e5')
-    for source,destination in [(0x89F0,0x89B0),(0x8A10,0x8C80),(0x8A20,0x8C90)]:
+    for source,destination in [(0x89F0,0x89B0),(0x8A10,0x8C80),(0x8A20,0x8C90),(0x8A30,0x8D00)]:
         c.op(0x21,source)
         c.op(0x11,destination)
         c.call('make_label_shadow')
@@ -512,6 +579,8 @@ def control_code():
     for style,attribute in [('color',0x14),('mono',0x00)]:
         c.mark(f'label_sprites_{style}')
         c.ld_a(ENABLED)
+        c.emit('fe 02')
+        c.op(0xCA,f'label_sprites_{style}_third')
         c.emit('a7')
         c.op(0xCA,f'label_sprites_{style}_dx')
         c.op(0x11,f'label_sprites_{style}_b')
@@ -519,19 +588,22 @@ def control_code():
         c.mark(f'label_sprites_{style}_dx')
         c.op(0x11,f'label_sprites_{style}_a')
         c.jp(0x05B5)
-        for name,suffix in [('a',0xC8),('b',0xC9)]:
+        c.mark(f'label_sprites_{style}_third')
+        c.op(0x11,f'label_sprites_{style}_c')
+        c.jp(0x05B5)
+        for name,suffix in zip(['a','b','c'],LABEL_SHADOW_TILES):
             c.mark(f'label_sprites_{style}_{name}')
             for x,tile in [(0x18,suffix),(0x10,0x9B),(8,0xB4),(0,0xB3),
                            (0xF8,0xB2),(0xF0,0xB1),(0xE8,0xB0)]:
                 c.emit(f'f8 {x:02x} {tile:02x} {attribute:02x}')
             c.emit('80')
 
-    # Menu display routine runs in VBlank. Refresh just the 1/2 suffix and
+    # Menu display routine runs in VBlank. Refresh just the 1/2/3 suffix and
     # preserve the VRAM bank and the routine's original entry instruction.
     c.mark('indicator')
     c.emit('f0 4f f5 af e0 4f')
     c.ld_a(ENABLED)
-    c.emit('c6 a1')  # font 1 = $A1 (DX), 2 = $A2 (GB)
+    c.emit('c6 a1')  # font 1/2/3 = $A1/$A2/$A3
     c.store_a(0x99A9)
     c.call('draw_pinch_map')
     c.emit('f1 e0 4f')
@@ -540,7 +612,7 @@ def control_code():
     return c
 
 
-def build(dx: bytes, original: bytes):
+def build(dx: bytes, original: bytes, bombliss: bytes):
     rom = bytearray(dx) + bytearray([0xFF]) * len(dx)
     code = control_code()
     payload = code.finish()
@@ -609,6 +681,12 @@ def build(dx: bytes, original: bytes):
         patch(destination, bytes([0xFF])*len(music), music,
               f'{name} GB music engine/data, WRAM relocated; +{semitones} semitones, tempo {4+variant}/4'
               + ('; B-TYPE intro skipped at start and loop' if variant else ''))
+    bom_symbols = {}
+    for variant,(name,semitones) in enumerate(VARIANTS):
+        bank, symbols = compile_player(bombliss,Code,semitones)
+        patch((BOM_BANK+variant)*0x4000, bytes([0xFF])*0x4000, bank,
+              f'{name} Bombliss driver and CONTEST/PUZZLE/TRAINING music; +{semitones} semitones')
+        bom_symbols[name] = {k:f'0x{v:04X}' for k,v in symbols.items()}
     if code.origin + len(payload) > 0x3F00: raise ValueError('Control code exceeds free ROM0 region')
     patch(code.origin, bytes(len(payload)), payload, 'Music-bank control code')
     def hook(offset, expected, label, opcode=0xCD):
@@ -626,13 +704,14 @@ def build(dx: bytes, original: bytes):
     hook(0x14DB5, 'cd 9b 43', 'label_sprites_dmg')
     hook(0x14C61, 'fa a8 c0', 'indicator', 0xC3)
     patch(0x4C47, 'fe 0b 30 05', bytes([0xC3])+code.labels['height_music'].to_bytes(2,'little')+bytes(1),
-          'PINCH setting gates high-stack music for both sets')
+          'PINCH setting gates high-stack music for all three pages')
     hook(0x30B0C, 'cd 78 41', 'select_effect_pulse')
     rom[0x148] = 0x05  # 1 MiB, still MBC1 + RAM + battery.
     rom[0x14D] = (-sum(rom[0x134:0x14D])-25) & 0xFF
     rom[0x14E:0x150] = b'\0\0'
     rom[0x14E:0x150] = (sum(rom) & 0xFFFF).to_bytes(2,'big')
     return rom, {'patches': edits, 'symbols': {k: f'0x{v:04X}' for k,v in code.labels.items()},
+                 'bombliss_symbols': bom_symbols,
                  'output_sha256': hashlib.sha256(rom).hexdigest()}
 
 
@@ -647,11 +726,11 @@ def main():
         data = path.read_bytes()
         digest = hashlib.sha256(data).hexdigest()
         if digest != expected: parser.error(f'Unsupported ROM revision: {path}\nExpected {expected}\nGot {digest}')
-        if args.output.resolve() == path.resolve(): parser.error('Output must not replace either original ROM')
+        if args.output.resolve() == path.resolve(): parser.error('Output must not replace an original ROM')
         inputs[name] = data
     if (ROOT/'original_roms').resolve() in args.output.resolve().parents:
         parser.error('Write output outside original_roms')
-    rom, report = build(inputs[DX_NAME], inputs[GB_NAME])
+    rom, report = build(inputs[DX_NAME], inputs[GB_NAME], inputs[BOM_NAME])
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_bytes(rom)
     report['inputs'] = HASHES
