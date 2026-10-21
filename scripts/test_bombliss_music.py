@@ -148,8 +148,10 @@ def ui_checks(path,cgb):
         paused = bytes(gb.memory[SLOTS:SLOTS+0x90])
         assert sound_energy(gb,60) == 0
         assert bytes(gb.memory[SLOTS:SLOTS+0x90]) == paused
+        native_bgm = bytes(gb.memory[0xDDB0:0xDEA0])
         press(gb,'start',settle=30)
         assert gb.memory[PAUSED] == 0 and sound_energy(gb,30)>0
+        assert bytes(gb.memory[0xDDB0:0xDEA0]) == native_bgm, 'Unpausing Bombliss music must not wake the suspended DX theme'
     gb.stop(save=False)
     return f'{"CGB" if cgb else "DMG"}: three-page wrapping/debounce, MUSIC-3 glyphs/focus, mode-row lockout, A/B/C previews/gameplay, OFF and pause/resume verified'
 

@@ -208,9 +208,11 @@ def ui_checks(path, cgb):
         paused_state = bytes(gb.memory[0xDF20:0xDF60])
         assert sound_energy(gb,60) == 0
         assert bytes(gb.memory[0xDF20:0xDF60]) == paused_state
+        native_bgm = bytes(gb.memory[0xDDB0:0xDEA0])
         press(gb,'start',settle=60)
         assert gb.memory[PAUSED] == 0 and gb.memory[ACTIVE] == 1
         assert sound_energy(gb) > 0
+        assert bytes(gb.memory[0xDDB0:0xDEA0]) == native_bgm, 'Unpausing GB music must not wake the suspended DX theme'
         sfx_calls = []
         owned_samples = [0,0,0,0]
         ownership_errors = []

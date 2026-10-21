@@ -40,6 +40,7 @@ PINCH_TILES = bytes([0x24,0x26,0x27,0x28,0x2D,0x2E,0x2F,0x38,0x3A,0x3B,
                      0x3C,0x3D,0x3E,0x3F,0x44,0x45,0x46,0x47,0x48,0x4B])
 PINCH_BACKDROP = 0xDF9D  # ten original bottom-row tile IDs, restored on mode rows
 IMPORTED_SONG = 0xDFA7  # normalized A/B/C ID 5/6/7, shared across variants
+SAVED_MUSIC = 0xAB22  # native song in bits 0..2; tagged page/PINCH in upper bits
 LABEL_SHADOW_TILES = (0xC8, 0xC9, 0xD0)
 VARIANTS = [('Normal', 0), ('Danger', 2), ('Peril', 4)]
 NEW_MUSIC, CURRENT_MUSIC = 0xDF78, 0xDF79
@@ -93,6 +94,38 @@ def control_code():
     c.emit('3e 01')
     c.store_a(PINCH_ENABLED)
     c.jp(0x3F00)
+
+    c.mark('save_music_settings')
+    # Both native suspend paths checksum $AB00..AFFF, then set $AC05 = 1.
+    # Reuse spare bits in the existing song byte so the settings are covered
+    # by that checksum, without claiming unused SRAM or changing its size.
+    c.emit('f3')
+    c.ld_a(ENABLED)
+    c.emit('87 87 87 47')  # page in bits 3..4
+    c.ld_a(PINCH_ENABLED)
+    c.emit('e6 01 87 87 87 87 87 b0 47')  # PINCH in bit 5
+    c.ld_a(SAVED_MUSIC)
+    c.emit('e6 07 b0 f6 80')  # tag distinguishes new saves from native/old ones
+    c.store_a(SAVED_MUSIC)
+    c.jp(0x1035)  # original checksum, interrupt handling and return
+
+    c.mark('load_saved_song')
+    c.ld_a(SAVED_MUSIC)
+    c.emit('e6 07 c9')  # both native menu readers must see only A/B/C/OFF
+
+    c.mark('continue_music')
+    c.ld_a(SAVED_MUSIC)
+    c.emit('e6 c0 fe 80')
+    c.op(0xC2,'continue_native_music')  # old save: startup defaults, MUSIC-1/ON
+    c.ld_a(SAVED_MUSIC)
+    c.emit('0f 0f 0f e6 03 fe 03')
+    c.op(0xD2,'continue_native_music')  # reject unknown page encoding
+    c.store_a(ENABLED)
+    c.ld_a(SAVED_MUSIC)
+    c.emit('e6 20 07 07 07')
+    c.store_a(PINCH_ENABLED)
+    c.mark('continue_native_music')
+    c.jp(0x4C3B)  # displaced call: request the saved stack-height music
 
     # All expanded-bank execution is interrupt protected. MBC1's high bank
     # register must be restored before DX's ordinary bank-switching code runs.
@@ -232,6 +265,14 @@ def control_code():
     c.store_a(PAUSED)
     c.emit('3e 80')
     c.store_a(RESTORE_ALL)
+    # DX's zero-song request suspends its previous BGM voices; it does not
+    # discard them. Its native resume would reactivate the title/level theme
+    # alongside our imported player. Only native music uses that resume path.
+    c.ld_a(ACTIVE)
+    c.emit('a7')
+    c.op(0xCA,'native_resume')
+    c.emit('af c9')
+    c.mark('native_resume')
     c.call(0x3F60)
     c.jp(0x42E4)
 
@@ -698,6 +739,11 @@ def build(dx: bytes, original: bytes, bombliss: bytes):
     hook(0x3F18, 'cd 60 3f', 'bgm_conditional', 0xC3)
     hook(0x3F24, 'cd 60 3f', 'pause', 0xC3)
     hook(0x3F2A, 'cd 60 3f', 'resume', 0xC3)
+    hook(0x101D, 'cd 35 10', 'save_music_settings')
+    hook(0x5133, 'cd 35 10', 'save_music_settings')
+    hook(0x1013, 'cd 3b 4c', 'continue_music')
+    hook(0x14BDD, 'fa 22 ab', 'load_saved_song')
+    hook(0x15B7F, 'fa 22 ab', 'load_saved_song')
     hook(0x14C48, 'cd 6f 4c', 'menu_modes')
     hook(0x14C5B, 'cd ab 4c', 'menu_music')
     hook(0x14C01, 'ea a8 c0', 'menu_layout')

@@ -86,7 +86,41 @@ ON/OFF tilemap with music focus, or restores those original IDs with mode focus.
 No tile graphics are rewritten in VBlank. All native BG/OBJ palettes and strip
 attributes are retained; PINCH uses no sprites. BG palette 5 is also used by the
 song-selection window, so it must not be repurposed for the indicator.
-Both menu settings persist in WRAM until reset, with PINCH initialized to ON.
+Both menu settings persist in WRAM during play. Startup defaults are MUSIC-1
+and PINCH ON; continuing a suspended game restores its saved settings.
+
+## Battery-backed continuation
+
+DX keeps its live game in SRAM and checksums `$AB00..AFFF` when suspending.
+Its native song-choice byte at `$AB22` originally stores only 0..4. The patch
+retains that index in bits 0..2, stores the music page (0..2) in bits 3..4,
+PINCH in bit 5, and a format tag in bit 7 (bit 6 stays clear). This uses the
+existing 8 KiB save and native checksum, without reserving unrelated SRAM bytes.
+
+Both native calls to checksum routine `$1035`, at ROM `$00101D` (continuation)
+and `$005133` (pause), go through `save_music_settings`. It encodes the settings
+before running the original checksum routine. `$AC05` is still set by the native
+caller afterward, so the original checksum validation and suspend flag agree.
+The native menu readers at `$014BDD` and `$015B7F` use `load_saved_song` to mask
+out the settings bits before treating the value as a song index.
+
+The call at `$001013` goes through `continue_music`, restoring the page and
+PINCH immediately before the original stack-height music request at `$4C3B`.
+Continuation therefore starts the correct player and variant before pausing it
+as DX normally does; unpausing resumes that player. Old, untagged saves remain
+loadable with MUSIC-1 and PINCH ON because they contain no saved page/setting.
+Unrecognized page encodings also retain those startup defaults. Normal native
+save rejection and the behavior of declining CONTINUE are preserved.
+
+DX's zero-song BGM request only suspends its previous music: `$4414` clears
+bit 7 in the four BGM voices at `$DDB0 + channel * $3C`, leaving their score
+state and bits 5/6 intact. Native resume at `$42E4` sets bit 7 again. Calling
+that routine while resuming an imported player would also wake DX's prior
+title or level-selection theme. The patched resume therefore only clears the
+imported player's pause flag and requests note restoration when `$DF91` is
+nonzero. It returns without invoking native resume; the native BGM remains
+suspended and SFX still advance normally. Native music retains its own resume
+path. This applies to both ordinary pauses and battery-backed continuation.
 
 ## Original player and ROM banking
 
@@ -414,6 +448,18 @@ on locked channels. The detailed report is
 builder/output are unchanged by this inspection.
 
 ## Verification and development tools
+
+`test_save_music.py` creates a registered profile through the UI, suspends games,
+then starts fresh PyBoy instances with only their battery RAM. Its 30 cases per
+hardware mode cover MUSIC-1/2/3, A/B/C/OFF, both PINCH settings and all four game
+modes. It verifies native save validation, correct music after CONTINUE, silence
+while paused, unpause, saving again, legacy saves, checksum corruption, declining
+CONTINUE and masking the menu's song index. After unpause, the tests also check
+that all four native BGM voices remain disabled and their score state remains
+frozen while imported music plays, preventing a second theme from overlapping.
+Run
+`python scripts/test_save_music.py` with the emulator test dependencies installed;
+the report is `output/validation/save-music-results.json`.
 
 `test_rom.py` uses in-memory ROM/save streams and never saves beside the originals.
 It navigates through profile creation and Guest selection using normal buttons.
