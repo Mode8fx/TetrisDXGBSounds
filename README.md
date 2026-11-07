@@ -10,5 +10,7 @@ It also adds the ability to toggle the pinch (speed-up) music on/off by pressing
 
 The download can be found [here](https://github.com/Mode8fx/TetrisDXGBSounds/tree/main/patches).
 
+![](screenshots/screenshot-1-v1.0.png)![](screenshots/screenshot-2-v1.0.png)![](screenshots/screenshot-3-v1.0.png)
+
 ## Notes
 - AI was used in the development of this hack (specifically, GPT 6.1 Sol), with human playtesting by me. Everything works as far as I can tell, but feel free to submit an issue if you find any bugs and I will fix them.
